@@ -1,2 +1,37 @@
-# emphprod
+# `emphprod`: EMPHATIC collaboration production tools
 Tools used for EMPHATIC Production
+
+## Documentation
+
+For documentation on the use and maintenance of the tools in this repository, please visit the [Production wiki](https://github.com/EMPHATICSoft/emphprod/wiki)
+
+## Contributing
+
+#### Get a copy of the code
+... by [cloning the repository](https://docs.github.com/en/github/creating-cloning-and-archiving-repositories/cloning-a-repository-from-github/cloning-a-repository).
+
+If you have your ssh key setup, this should be as simple as running
+```
+git clone git@github.com:EMPHATICSoft/emphprod.git
+```
+
+#### Contribute to the repository
+[Submit a pull request](https://docs.github.com/en/github/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request) on GitHub. 
+
+##### **Create a topic branch**
+*(Please note that this will only work if you have write access to the GitHub repository.  All members of the `EMPHATICSoft` team *should* have write access, so this shouldn't be an issue)*
+
+Check out a new branch in your working copy of the repository (the result of cloning it; see "Get a copy of the code" above):
+```
+git checkout -b feature/${USER}_branch_description
+```
+Commit your changes onto this branch.
+
+Once you're satisfied, push it to the repository:
+```
+git push --set-upstream origin feature/${USER}_branch_description
+```
+
+(For subsequent pushes to the origin repository from this branch, you can simply `git push`.)
+
+Then, enter the GitHub interface and follow the "Submit a pull request" documentation above.  Please enter meaningful descriptions of your changes so that it's easier to understand them :)
