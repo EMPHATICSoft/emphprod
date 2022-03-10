@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# This is a cousin to samweb2xrootd. It takes a path that you could "ls" in
+# /pnfs and puts it in a format that ROOT or ART can understand. Can accept
+# multiple arguments.
+
+if [[ $# == 0 ]]
+then
+    echo 'Usage: pnfs2xrootd [--force-auth|--unauth-onsite|--force-unauth] FILENAMES...' 1>&2
+    echo 'Default (for now) is --force-auth' 1>&2
+    exit 1
+fi
+
+ONSITE=no
+if [[ `hostname` == *.fnal.gov ]]; then ONSITE=yes; fi
+
+AUTH=yes
+if [[ $1 == '--force-auth' ]]; then shift; AUTH=yes; fi
+if [[ $1 == '--force-unauth' ]]; then shift; AUTH=no; fi
+if [[ $1 == '--unauth-onsite' ]]
+then
+    shift
+    if [ $ONSITE == yes ]; then AUTH=no; fi
+fi
+
+if [ $AUTH == yes ]
+then
+    PNFSHOST=fndca1.fnal.gov:1094
+else
+    PNFSHOST=fndca1.fnal.gov:1095
+fi
+
+while true
+do
+echo -n `readlink -m -v $1` | sed -e 's%/pnfs%root://'$PNFSHOST'//pnfs/fnal.gov/usr%'
+shift
+if [ x$1 == x ]; then break; fi
+echo -n ' '
+done
+
+echo
+
