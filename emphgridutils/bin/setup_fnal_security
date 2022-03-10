@@ -1,0 +1,233 @@
+#!/bin/bash
+
+
+
+###################################################################################
+# Prints a help menu when the script is invoked with -h option or invalid option
+###################################################################################
+
+usage () {
+    echo "" >&2
+    echo "Setup the tickets, certificates, and proxies required to use FNAL computing" >&2
+    echo "">&2
+    echo "usage: setup_fnal_security [options]" >&2
+    echo "options:" >&2
+    echo "     -h/--help:       Prints this usage message.                    " >&2
+    echo "     -f/--force:      Force a new proxy to be generated." >&2
+    echo "     -c/--check:      Just check the proxy, don't get a new one." >&2
+    echo "     -b/--batch:      Do not ask for user input." >&2
+    echo "     -k/--kerberos:   Also check kerberos ticket." >&2
+    echo "     -q/--quiet:      Suppress regular output, errors still shown" >&2
+    echo "                                                                 " >&2
+    exit 1 
+}
+
+
+###################################################################################
+# Set default values
+###################################################################################
+
+unset FORCE
+unset CHECK
+unset BATCH
+unset KERBEROS
+unset QUIET
+ROLE=Analysis
+
+
+###################################################################################
+# Use getopt to process the arguments that the script is invoked with
+###################################################################################
+
+process_args () {
+    errorcode=0
+    while getopts "hfcbkqp-:" opt; do
+        if [ "$opt" = "-" ]; then
+            opt=$OPTARG
+        fi
+        case $opt in
+            h | help)
+                usage
+		errorcode=1
+                ;;
+            f | force)
+                FORCE=yes
+                ;;
+            c | check)
+                CHECK=yes
+                ;;
+            b | batch)
+                BATCH=yes
+                ;;
+            k | kerberos)
+                KERBEROS=yes
+                ;;
+            q | quiet)
+                QUIET=yes
+                ;;
+            \?)
+                exit 2
+                ;;
+        esac
+    done
+
+    if [[ ! -z $QUIET && -z $BATCH ]]; then
+        echo "Cannot use quiet mode when not in batch mode." >&2
+        exit 2
+    fi
+
+    if [[ ! -z $KERBEROS && ! -z $BATCH ]]; then
+        echo "Cannot get kerberos tickets in batch mode." >&2
+        exit 2
+    fi
+}
+
+
+
+###################################################################################
+# Get a kerberos ticket if we can
+###################################################################################
+
+do_kinit ()
+{
+    if [[ -z $BATCH ]]; then
+        echo ""
+        echo "##########"
+        echo "Running: kinit -l 7d"
+        kinit -l 7d
+        echo "##########"
+        echo ""
+    else
+        echo "Cannot get Kerberos tickets in batch mode."
+    fi
+}
+
+
+###################################################################################
+# Get a certificate
+###################################################################################
+
+do_getcert ()
+{
+    # Check the CI certificate
+    RETRY=0
+    while ! kx509 ; do
+        let RETRY=RETRY+1
+        if [ $RETRY -gt 3 ]; then
+            echo "Failed 3 times. Aborting."
+            exit 1
+        fi
+        
+        echo "Failed to get a certificate."
+        do_kinit
+    done
+}
+
+
+###################################################################################
+# Main body for this script
+###################################################################################
+
+main () {
+        
+    # Check the proxy location
+    default_proxy=/tmp/x509up_u$(id -u)
+    if [[ ! -z $X509_USER_PROXY ]]; then
+        if [[ $X509_USER_PROXY != $default_proxy ]]; then
+            echo "##########"
+            echo "WARNING:"
+            echo "Warning: The X509_USER_PROXY environment variable is set to a non-standard location: $X509_USER_PROXY."
+            echo "If authentication is not working, try reverting to the default value:"
+            echo "export X509_USER_PROXY=$default_proxy"
+            echo "##########"
+            echo ""
+        fi
+    fi
+
+    # If the -f/--force option is given force a new proxy to be made
+    if [[ ! -z $FORCE ]]; then
+        echo "Forcing regeneration of proxy by removing existing one from X509_USER_PROXY=$X509_USER_PROXY"
+        if [[ -z $X509_USER_PROXY ]]; then
+            echo "X509_USER_PROXY is not set, so remove from default location $default_proxy"
+            X509_USER_PROXY=$default_proxy
+        fi
+        echo "rm $X509_USER_PROXY"
+        rm $X509_USER_PROXY
+    fi
+    
+    
+    # Check Kerberos Ticket
+    if [[ ! -z $KERBEROS ]]; then
+        if ! klist -5 -s && ! klist -s; then
+            do_kinit
+        fi
+    fi
+    
+    do_getcert
+    
+    # Check the VOMS proxy
+    if [ -z "`voms-proxy-info -all|grep "^attribute"`" ]; then
+        echo "No valid VOMS proxy found, getting one"
+	voms-proxy-init -rfc -noregen -voms=fermilab:/fermilab/nova/Role=$ROLE -valid 120:00 
+    fi
+    
+}
+
+
+###################################################################################
+# Special check mode
+###################################################################################
+
+check () {
+        
+    # Check the proxy location
+    default_proxy=/tmp/x509up_u$(id -u)
+    if [[ ! -z $X509_USER_PROXY ]]; then
+        if [[ $X509_USER_PROXY != $default_proxy ]]; then
+            echo "##########"
+            echo "WARNING:"
+            echo "Warning: The X509_USER_PROXY environment variable is set to a non-standard location: $X509_USER_PROXY."
+            echo "If authentication is not working, try reverting to the default value:"
+            echo "export X509_USER_PROXY=$default_proxy"
+            echo "##########"
+            echo ""
+        fi
+    fi
+
+    # Check Kerberos Ticket
+    if [[ ! -z $KERBEROS ]]; then
+        if ! klist -5 -s && ! klist -s; then
+            echo "No valid kerberos ticket."
+            exit 1
+        fi
+    fi
+    
+    # Check the VOMS proxy
+    if [ -z "`voms-proxy-info -all|grep "^attribute"`" ]; then
+        echo "No valid VOMS proxy found"
+        exit 1
+    fi
+}
+
+
+
+
+###################################################################################
+# Process the arguments
+###################################################################################
+
+process_args $*
+
+
+###################################################################################
+# Run the script
+###################################################################################
+
+if [[ ! -z $CHECK ]]; then
+    check
+elif [[ -z $QUIET ]]; then
+    main
+else
+    main > /dev/null
+fi
+

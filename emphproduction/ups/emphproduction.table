@@ -1,0 +1,13 @@
+FILE=TABLE
+PRODUCT=emphproduction
+VERSION=XXVERSIONXX
+#
+#---------------------
+FLAVOR=NULL
+QUALIFIERS = ""
+
+ACTION=SETUP
+   pathPrepend(PATH, ${UPS_PROD_DIR}/bin )
+   setupEnv()
+   EnvSet(EMPHPRODUCTION_VERSION, ${UPS_PROD_VERSION} )
+   EnvSet(EMPHPRODUCTION_DIR, ${UPS_PROD_DIR} )
