@@ -60,9 +60,14 @@ sys.stderr = se # put it back
 isArt = bool(f.Get('Events'))
 
 if isArt:
-    treeNames = ['Events', 'Runs', 'SubRuns',
-                 'EventHistory', 'MetaData', 'Parentage',
-                 'EventMetaData', 'SubRunMetaData', 'RunMetaData']
+     treeNames = ['MetaData', 'FileIndex', 'Parentage',
+		  'Events', 'EventMetaData', 'SubRuns',
+		  'SubRunMetaData', 'Runs', 'RunMetaData',
+		  'ResultsTree', 'ResultsMetaData']
+
+#    treeNames = ['Events', 'Runs', 'SubRuns',
+#                 'EventHistory', 'MetaData', 'Parentage',
+#                 'EventMetaData', 'SubRunMetaData', 'RunMetaData']
 elif bool(f.Get("recTree")):
     treeNames = ['recTree', 'spillTree']
 
