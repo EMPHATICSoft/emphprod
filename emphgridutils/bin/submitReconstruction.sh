@@ -44,12 +44,12 @@ gridScriptName="basicReconstruction.sh"
 hostOutDir="${2:-/pnfs/emphatic/persistent/users/${USER}/testReconstruction}"
 
 #codeDir="/exp/emph/app/users/aolivier/batchSubmissionDevelopment"
-cd $(dirname $BASH_SOURCE)/../..
+cd $(dirname $BASH_SOURCE)/../../..
 codeDir=$(pwd)
 cd -
 
 #Prepare files needed for grid submission
-source $codeDir/emphaticsoft/GridSubmission/gridSubFunctions.sh
+source $codeDir/emphprod/emphgridutils/bin/gridSubFunctions.sh
 checkOutputDir $hostOutDir
 makeOutputDirectory $hostOutDir
 makeTarball $codeDir $hostOutDir
