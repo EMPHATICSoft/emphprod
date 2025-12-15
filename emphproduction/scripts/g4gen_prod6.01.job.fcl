@@ -1,0 +1,57 @@
+#include "Services.fcl"
+#include "BeamGen.fcl"
+#include "G4Gen.fcl"
+#include "SSDDigitizer.fcl"
+#include "ARICHDigitizer.fcl"
+#include "RelabelRawDigitModules.fcl"
+
+process_name: G4Sim2Raw
+
+services:
+{
+  TFileService: { fileName: "%ifb_dig_hist.root" closeFileFast: false }
+  @table::standard_services
+  RandomNumberGenerator: {}
+}
+
+#Start each new event with an empty event.
+source:
+{
+  module_type: EmptyEvent
+  maxEvents: 1000000
+  firstRun:  2408
+  firstSubRun: 1
+
+}
+
+physics:
+{
+  producers:
+  {
+	  generator: @local::proton120_run2408_data
+	  geantgen:  @local::standard_geant4
+    rawSSD:    @local::standard_ssddigitizer
+    rawARICH:  @local::standard_arichdigitizer
+    raw:       @local::standard_digitrelabel
+  }
+
+  simulate: [ generator , geantgen,
+              rawSSD, rawARICH, raw ]
+
+  trigger_paths: [ simulate ]
+  stream1: [ out1 ]
+  end_paths: [ stream1 ]
+}
+
+outputs:
+{
+  out1:
+  {
+    module_type: RootOutput
+    fileName:    "emphmc_r%r_s%s.v6.01.00.artdaq.root"
+    fastCloning: false
+    outputCommands: [ "keep *",
+                      "drop *_rawARICH_*_*",
+                      "drop *_rawSSD_*_*" ]
+  }
+}
