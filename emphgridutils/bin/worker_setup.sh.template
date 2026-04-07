@@ -1,0 +1,151 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+log() {
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+}
+
+safe_source() {
+  local script_path=$1
+  local label=$2
+  shift 2
+  local rc=0
+
+  log "Sourcing ${label} from ${script_path}"
+  # Some setup scripts rely on unset vars or return non-zero for non-fatal checks.
+  # Temporarily relax -e/-u while sourcing, then restore strict mode.
+  set +eu
+  source "${script_path}" "$@"
+  rc=$?
+  set -eu
+  if [[ ${rc} -ne 0 ]]; then
+    log "${label} returned non-zero (${rc}); continuing with post-setup validation"
+  else
+    log "Finished ${label}"
+  fi
+}
+
+require_env() {
+  local var_name=$1
+  [[ -n ${!var_name:-} ]] || die "Required environment variable is missing: ${var_name}"
+}
+
+on_error() {
+  local rc=$?
+  echo "ERROR: command failed at line $1 (exit code ${rc})" >&2
+  echo "PWD=$(pwd)" >&2
+  echo "PATH=${PATH}" >&2
+  type -a art >&2 || true
+
+  # Ensure stage-out has a concrete source path even on early setup failures.
+  if [[ -n ${CONDOR_DIR___OUTPUT_TAG__:-} && -n ${PROCESS:-} ]]; then
+    local job_output_dir="${CONDOR_DIR___OUTPUT_TAG__}/job_${PROCESS}"
+    mkdir -p "${job_output_dir}" || true
+    {
+      echo "wrapper_failed=1"
+      echo "exit_code=${rc}"
+      echo "line=$1"
+      echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "${job_output_dir}/wrapper_failure.txt" || true
+  fi
+
+  exit ${rc}
+}
+trap 'on_error ${LINENO}' ERR
+
+# Resolve source area for setup_emphatic.sh. We accept both common transfer layouts:
+# 1) INPUT_TAR_DIR_LOCAL already contains the emphaticsoft tree
+# 2) INPUT_TAR_DIR_LOCAL contains one top directory that contains the emphaticsoft tree
+resolve_source_dir() {
+  local base=$1
+
+  if [[ -f ${base}/setup/setup_emphatic.sh ]]; then
+    echo "${base}"
+    return
+  fi
+
+  if [[ -f ${base}/emphaticsoft/setup/setup_emphatic.sh ]]; then
+    echo "${base}/emphaticsoft"
+    return
+  fi
+
+  local candidate
+  for candidate in "${base}"/*; do
+    [[ -d ${candidate} ]] || continue
+    if [[ -f ${candidate}/setup/setup_emphatic.sh ]]; then
+      echo "${candidate}"
+      return
+    fi
+    if [[ -f ${candidate}/emphaticsoft/setup/setup_emphatic.sh ]]; then
+      echo "${candidate}/emphaticsoft"
+      return
+    fi
+  done
+
+  die "Could not locate setup/setup_emphatic.sh under ${base}. Check --code-dir transfer contents."
+}
+
+# Resolve build area by looking for CMakeCache.txt (present in any cmake build root).
+resolve_build_dir() {
+  local base=$1
+
+  if [[ -f ${base}/CMakeCache.txt ]]; then
+    echo "${base}"
+    return
+  fi
+
+  local candidate
+  for candidate in "${base}"/*; do
+    [[ -d ${candidate} ]] || continue
+    if [[ -f ${candidate}/CMakeCache.txt ]]; then
+      echo "${candidate}"
+      return
+    fi
+  done
+
+  die "Could not locate CMakeCache.txt under ${base}. Check --build-dir transfer contents."
+}
+
+require_env INPUT_TAR_DIR_LOCAL
+require_env CONDOR_DIR___OUTPUT_TAG__
+require_env CONDOR_DIR_INPUT
+require_env PROCESS
+
+job_output_dir="${CONDOR_DIR___OUTPUT_TAG__}/job_${PROCESS}"
+mkdir -p "${job_output_dir}"
+log "Prepared output directory: ${job_output_dir}"
+
+source_dir=$(resolve_source_dir "${INPUT_TAR_DIR_LOCAL}")
+build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL}")
+log "source_dir=${source_dir}"
+log "build_dir=${build_dir}"
+
+safe_source "${source_dir}/setup/setup_emphatic.sh" "setup_emphatic.sh"
+
+cd "${build_dir}"
+log "Changed to build directory: ${build_dir}"
+
+# setup_for_grid.sh installs bash shims for setenv/tnotnull/etc. and sets
+# CETPKG_SOURCE + CETPKG_BUILD.  It does NOT write any files, so it is safe
+# on the read-only CVMFS mount that holds the payload.
+safe_source "${source_dir}/setup/setup_for_grid.sh" "setup_for_grid.sh"
+
+# setup_emphaticsoft is pre-generated at build time; it uses the setenv shim
+# installed by setup_for_grid.sh so it works in bash without tcsh.
+if [[ -f setup_emphaticsoft ]]; then
+  safe_source "$(pwd)/setup_emphaticsoft" "setup_emphaticsoft"
+else
+  log "WARNING: setup_emphaticsoft not found in build area; skipping"
+fi
+
+command -v art >/dev/null 2>&1 || die "'art' not found after setup. Check setup_emphatic.sh and build payload products."
+log "art found at: $(command -v art)"
+
+cd "${CONDOR_DIR___OUTPUT_TAG__}"
+cd "job_${PROCESS}"
+log "Running in output directory: $(pwd)"
