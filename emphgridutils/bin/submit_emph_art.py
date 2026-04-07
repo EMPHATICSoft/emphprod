@@ -336,10 +336,19 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def build_common_parser() -> argparse.ArgumentParser:
+    """Build a parent parser containing options shared by all subcommands."""
+    parser = argparse.ArgumentParser(add_help=False, formatter_class=HelpFormatter)
+    add_common_groups(parser)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build top-level CLI parser and subcommands."""
+    common_parser = build_common_parser()
     parser = argparse.ArgumentParser(
         description="EMPHATIC grid submission utility",
+        parents=[common_parser],
         formatter_class=HelpFormatter,
         epilog=(
             "Environment defaults:\n"
@@ -353,11 +362,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     gen = subparsers.add_parser(
         "gen",
+        parents=[common_parser],
         help="Submit generation jobs",
         description="Submit generator jobs that build per-process FHiCL and run art without an input ROOT list.",
         formatter_class=HelpFormatter,
     )
-    add_common_groups(gen)
     gen_required = gen.add_argument_group("Required arguments")
     gen_required.add_argument(
         "template",
@@ -396,11 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     reco = subparsers.add_parser(
         "reco",
+        parents=[common_parser],
         help="Submit reconstruction jobs",
         description="Submit reconstruction jobs over explicit inputs or paths read from stdin.",
         formatter_class=HelpFormatter,
     )
-    add_common_groups(reco)
     reco_required = reco.add_argument_group("Required arguments")
     reco_required.add_argument(
         "config",
