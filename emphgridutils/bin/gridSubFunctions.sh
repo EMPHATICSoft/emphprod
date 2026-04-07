@@ -148,7 +148,7 @@ checkOutputDir()
   if [[ ! $hostOutDir =~ /pnfs/emphatic/persistent ]]
   then
     echo "Output directory must be on /pnfs/emphatic/persistent, but it's currently set to $hostOutDir"
-    echo "Try running submitGenerator.sh/submitReconstruction.sh from the directory where you want output to go."
+    echo "Use submit_emph_art.py (gen/reco) from the directory where you want output to go."
     exit 1
   fi
 }
