@@ -13,63 +13,20 @@ log() {
 safe_source() {
   local script_path=$1
   local label=$2
+  shift 2
   local rc=0
 
   log "Sourcing ${label} from ${script_path}"
   # Some setup scripts rely on unset vars or return non-zero for non-fatal checks.
   # Temporarily relax -e/-u while sourcing, then restore strict mode.
   set +eu
-  source "${script_path}"
+  source "${script_path}" "$@"
   rc=$?
   set -eu
   if [[ ${rc} -ne 0 ]]; then
     log "${label} returned non-zero (${rc}); continuing with post-setup validation"
   else
     log "Finished ${label}"
-  fi
-}
-
-import_csh_environment() {
-  local script_path=$1
-  local label=$2
-  local env_dump
-
-  command -v tcsh >/dev/null 2>&1 || die "${label} looks like csh syntax but tcsh is not available"
-  env_dump=$(mktemp)
-
-  log "Importing environment from csh script ${script_path}"
-  tcsh -f -c "source ${script_path} >/dev/null; env" > "${env_dump}" || {
-    rm -f "${env_dump}"
-    die "Failed to source ${label} with tcsh"
-  }
-
-  while IFS='=' read -r name value; do
-    [[ -n ${name} ]] || continue
-    case "${name}" in
-      PWD|OLDPWD|SHLVL|_)
-        continue
-        ;;
-    esac
-    export "${name}=${value}"
-  done < "${env_dump}"
-
-  rm -f "${env_dump}"
-  log "Imported environment from ${label}"
-}
-
-source_setup_script() {
-  local script_path=$1
-  local label=$2
-
-  if [[ -f ${script_path}.sh ]]; then
-    safe_source "${script_path}.sh" "${label}.sh"
-    return
-  fi
-
-  if grep -q "setenv" "${script_path}"; then
-    import_csh_environment "${script_path}" "${label}"
-  else
-    safe_source "${script_path}" "${label}"
   fi
 }
 
@@ -133,11 +90,11 @@ resolve_source_dir() {
   die "Could not locate setup/setup_emphatic.sh under ${base}. Check --code-dir transfer contents."
 }
 
-# Resolve build area for setup_emphaticsoft. We accept build root directly or one nested level.
+# Resolve build area by looking for CMakeCache.txt (present in any cmake build root).
 resolve_build_dir() {
   local base=$1
 
-  if [[ -f ${base}/setup_emphaticsoft ]]; then
+  if [[ -f ${base}/CMakeCache.txt ]]; then
     echo "${base}"
     return
   fi
@@ -145,13 +102,13 @@ resolve_build_dir() {
   local candidate
   for candidate in "${base}"/*; do
     [[ -d ${candidate} ]] || continue
-    if [[ -f ${candidate}/setup_emphaticsoft ]]; then
+    if [[ -f ${candidate}/CMakeCache.txt ]]; then
       echo "${candidate}"
       return
     fi
   done
 
-  die "Could not locate setup_emphaticsoft under ${base}. Check --build-dir transfer contents."
+  die "Could not locate CMakeCache.txt under ${base}. Check --build-dir transfer contents."
 }
 
 require_env INPUT_TAR_DIR_LOCAL
@@ -165,22 +122,15 @@ log "Prepared output directory: ${job_output_dir}"
 
 source_dir=$(resolve_source_dir "${INPUT_TAR_DIR_LOCAL}")
 build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL}")
-setup_emphatic=${source_dir}/setup/setup_emphatic.sh
-safe_source "${setup_emphatic}" "setup_emphatic.sh"
+log "source_dir=${source_dir}"
+log "build_dir=${build_dir}"
 
-export CETPKG_SOURCE="${source_dir}"
-export CETPKG_BUILD="${build_dir}"
-log "Set CETPKG_SOURCE=${CETPKG_SOURCE}"
-log "Set CETPKG_BUILD=${CETPKG_BUILD}"
+safe_source "${source_dir}/setup/setup_emphatic.sh" "setup_emphatic.sh"
 
 cd "${build_dir}"
-log "Changed directory to build area: ${build_dir}"
+log "Changed to build directory: ${build_dir}"
 
-if [[ -f setup_emphaticsoft ]]; then
-  source_setup_script "setup_emphaticsoft" "setup_emphaticsoft"
-else
-  die "Missing setup_emphaticsoft in build area: ${build_dir}"
-fi
+safe_source "${source_dir}/ups/setup_for_development" "setup_for_development" -p
 
 command -v art >/dev/null 2>&1 || die "'art' not found after setup. Check setup_emphatic.sh and build payload products."
 log "art found at: $(command -v art)"
