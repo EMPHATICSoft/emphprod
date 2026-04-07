@@ -8,18 +8,18 @@
 
 usage () {
     echo "" >&2
-    echo "Setup the tickets, certificates, and proxies required to use FNAL computing" >&2
+    echo "Setup the tickets and tokens required to use FNAL computing" >&2
     echo "">&2
     echo "usage: setup_fnal_security [options]" >&2
     echo "options:" >&2
     echo "     -h/--help:       Prints this usage message.                    " >&2
-    echo "     -f/--force:      Force a new proxy to be generated." >&2
-    echo "     -c/--check:      Just check the proxy, don't get a new one." >&2
+    echo "     -f/--force:      Force a new token to be generated." >&2
+    echo "     -c/--check:      Just check the token, don't get a new one." >&2
     echo "     -b/--batch:      Do not ask for user input." >&2
     echo "     -k/--kerberos:   Also check kerberos ticket." >&2
     echo "     -q/--quiet:      Suppress regular output, errors still shown" >&2
     echo "                                                                 " >&2
-    exit 1 
+    exit 1
 }
 
 
@@ -104,109 +104,68 @@ do_kinit ()
 
 
 ###################################################################################
-# Get a certificate
-###################################################################################
-
-do_getcert ()
-{
-    # Check the CI certificate
-    RETRY=0
-    while ! kx509 ; do
-        let RETRY=RETRY+1
-        if [ $RETRY -gt 3 ]; then
-            echo "Failed 3 times. Aborting."
-            exit 1
-        fi
-        
-        echo "Failed to get a certificate."
-        do_kinit
-    done
-}
-
-
-###################################################################################
 # Main body for this script
 ###################################################################################
 
 main () {
-        
-    # Check the proxy location
-    default_proxy=/tmp/x509up_u$(id -u)
-    if [[ ! -z $X509_USER_PROXY ]]; then
-        if [[ $X509_USER_PROXY != $default_proxy ]]; then
+
+    # Check token location
+    default_token=/tmp/bt_token_emphatic_${ROLE}_$(id -u)
+    if [[ -z $BEARER_TOKEN_FILE ]]; then
+        export BEARER_TOKEN_FILE=$default_token
+        echo "BEARER_TOKEN_FILE environment variable is not set, so using its default location: $BEARER_TOKEN_FILE"
+    else
+        if [[ $BEARER_TOKEN_FILE == "/srv/"* ]]; then
+            echo "Using bearer token provided by condor at $BEARER_TOKEN_FILE"
+            grid_token=1
+        elif [[ $BEARER_TOKEN_FILE != $default_token ]]; then
             echo "##########"
             echo "WARNING:"
-            echo "Warning: The X509_USER_PROXY environment variable is set to a non-standard location: $X509_USER_PROXY."
+            echo "BEARER_TOKEN_FILE environment variable is set to a non-standard location: $BEARER_TOKEN_FILE."
             echo "If authentication is not working, try reverting to the default value:"
-            echo "export X509_USER_PROXY=$default_proxy"
+            echo "export BEARER_TOKEN_FILE=$default_token"
             echo "##########"
             echo ""
+        else
+            echo "BEARER_TOKEN_FILE environment variable is set to its default location: $BEARER_TOKEN_FILE"
         fi
     fi
 
-    # If the -f/--force option is given force a new proxy to be made
-    if [[ ! -z $FORCE ]]; then
-        echo "Forcing regeneration of proxy by removing existing one from X509_USER_PROXY=$X509_USER_PROXY"
-        if [[ -z $X509_USER_PROXY ]]; then
-            echo "X509_USER_PROXY is not set, so remove from default location $default_proxy"
-            X509_USER_PROXY=$default_proxy
+    # Print information on existence and validity of token
+    if [[ -f $BEARER_TOKEN_FILE ]]; then
+        token_exp_hr=$(htdecodetoken -H 2>/dev/null | jq ".exp" | tr -d '"')
+        token_exp_epoch=$(htdecodetoken 2>/dev/null | jq ".exp")
+        if (( $token_exp_epoch > $(date +%s) )); then
+            valid_token=true
+            echo "Token found and is valid (expires $token_exp_hr)"
+        else
+            echo "Token found but is no longer valid (expired $token_exp_hr)"
         fi
-        echo "rm $X509_USER_PROXY"
-        rm $X509_USER_PROXY
+    else
+        echo "No bearer token found in $BEARER_TOKEN_FILE"
     fi
-    
-    
+
+    # If the -c/--check option is given, return before doing anything
+    if [[ ! -z $CHECK ]]; then
+        exit
+    fi
+
+    # don't run htgettoken if we're on the grid
+    if [[ ! -z $grid_token ]]; then
+        exit
+    fi
+
+    if [[ ! -z $FORCE ]] || [[ -z $valid_token ]]; then
+        htgettoken -a htvaultprod.fnal.gov -i emphatic
+    fi
+
     # Check Kerberos Ticket
     if [[ ! -z $KERBEROS ]]; then
         if ! klist -5 -s && ! klist -s; then
             do_kinit
         fi
     fi
-    
-    do_getcert
-    
-    # Check the VOMS proxy
-    if [ -z "`voms-proxy-info -all|grep "^attribute"`" ]; then
-        echo "No valid VOMS proxy found, getting one"
-	voms-proxy-init -rfc -noregen -voms=fermilab:/fermilab/nova/Role=$ROLE -valid 120:00 
-    fi
-    
-}
 
-
-###################################################################################
-# Special check mode
-###################################################################################
-
-check () {
-        
-    # Check the proxy location
-    default_proxy=/tmp/x509up_u$(id -u)
-    if [[ ! -z $X509_USER_PROXY ]]; then
-        if [[ $X509_USER_PROXY != $default_proxy ]]; then
-            echo "##########"
-            echo "WARNING:"
-            echo "Warning: The X509_USER_PROXY environment variable is set to a non-standard location: $X509_USER_PROXY."
-            echo "If authentication is not working, try reverting to the default value:"
-            echo "export X509_USER_PROXY=$default_proxy"
-            echo "##########"
-            echo ""
-        fi
-    fi
-
-    # Check Kerberos Ticket
-    if [[ ! -z $KERBEROS ]]; then
-        if ! klist -5 -s && ! klist -s; then
-            echo "No valid kerberos ticket."
-            exit 1
-        fi
-    fi
-    
-    # Check the VOMS proxy
-    if [ -z "`voms-proxy-info -all|grep "^attribute"`" ]; then
-        echo "No valid VOMS proxy found"
-        exit 1
-    fi
 }
 
 
@@ -223,9 +182,7 @@ process_args $*
 # Run the script
 ###################################################################################
 
-if [[ ! -z $CHECK ]]; then
-    check
-elif [[ -z $QUIET ]]; then
+if [[ -z $QUIET ]]; then
     main
 else
     main > /dev/null
