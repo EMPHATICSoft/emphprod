@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -37,6 +38,7 @@ from submit_emph_art_core import (
 
 CODE_DIR_ENV = "EMPH_CODE_DIR"
 BUILD_DIR_ENV = "EMPH_BUILD_DIR"
+STAGING_ROOT = "staging_dir"
 
 
 def print_env(args: argparse.Namespace) -> None:
@@ -55,6 +57,24 @@ def print_env(args: argparse.Namespace) -> None:
     print(f"BUILD_DIR={args.build_dir}")
     for key in keys:
         print(f"{key}={os.environ.get(key, '<unset>')}")
+
+
+def create_local_staging_dir(mode: str) -> Path:
+    """Create a dedicated local staging directory for generated submission artifacts."""
+    staging_root = Path.cwd() / STAGING_ROOT
+    staging_root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"{mode}_", dir=staging_root))
+
+
+def stage_local_file(staging_dir: Path, requested_name: str) -> Path:
+    """Place a generated local artifact into the staging directory using only its basename."""
+    return staging_dir / Path(requested_name).name
+
+
+def print_staging_dir(staging_dir: Path) -> None:
+    """Tell the user where generated local artifacts were written."""
+    info(f"Local staging directory: {staging_dir}")
+    info("Remove that directory when you no longer need the generated wrapper/input-list files")
 
 
 def consolidate_debug_modes(args: argparse.Namespace) -> None:
@@ -181,7 +201,8 @@ def submit_generator(args: argparse.Namespace) -> None:
     info(f"Preparing generator submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
-    wrapper_path = Path(args.wrapper).resolve()
+    staging_dir = create_local_staging_dir("gen")
+    wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: render fcl then run art.
     body = [
@@ -193,6 +214,7 @@ def submit_generator(args: argparse.Namespace) -> None:
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
+    print_staging_dir(staging_dir)
 
     cmd = build_generator_jobsub_command(args, host_out_dir, wrapper_path, code_dir, build_dir)
     if args.print_jobsub:
@@ -222,11 +244,12 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     info(f"Preparing reconstruction submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
-    file_list = Path(args.input_list).resolve()
+    staging_dir = create_local_staging_dir("reco")
+    file_list = stage_local_file(staging_dir, args.input_list)
     if not args.dry_run:
         file_list.write_text("\n".join(inputs) + "\n")
 
-    wrapper_path = Path(args.wrapper).resolve()
+    wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: pick job-specific input then run art.
     body = [
@@ -238,6 +261,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
+    print_staging_dir(staging_dir)
 
     cmd = build_reconstruction_jobsub_command(
         args,
