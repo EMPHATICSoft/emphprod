@@ -60,6 +60,7 @@ def print_env(args: argparse.Namespace) -> None:
     print("=== Environment Summary ===")
     print(f"CODE_DIR={args.code_dir}")
     print(f"BUILD_DIR={args.build_dir}")
+    print(f"PAYLOAD_TARBALL={args.payload_tarball}")
     for key in keys:
         print(f"{key}={os.environ.get(key, '<unset>')}")
 
@@ -106,24 +107,31 @@ def consolidate_debug_modes(args: argparse.Namespace) -> None:
 
 def validate_common_inputs(args: argparse.Namespace) -> None:
     """Validate shared prerequisites used by both submission modes."""
-    args.code_dir = args.code_dir.resolve()
-    args.build_dir = args.build_dir.resolve()
+    if args.payload_tarball is not None:
+        args.payload_tarball = args.payload_tarball.resolve()
+        if not args.payload_tarball.exists():
+            raise SubmissionError(f"Payload tarball does not exist: {args.payload_tarball}")
+        if not args.payload_tarball.is_file():
+            raise SubmissionError(f"Payload tarball is not a file: {args.payload_tarball}")
+    else:
+        args.code_dir = args.code_dir.resolve()
+        args.build_dir = args.build_dir.resolve()
 
-    if not args.code_dir.exists():
-        raise SubmissionError(f"Code directory does not exist: {args.code_dir}")
-    if not args.code_dir.is_dir():
-        raise SubmissionError(f"Code directory is not a directory: {args.code_dir}")
-    setup_candidate_a = args.code_dir / "setup" / "setup_emphatic.sh"
-    setup_candidate_b = args.code_dir / "emphaticsoft" / "setup" / "setup_emphatic.sh"
-    if not setup_candidate_a.is_file() and not setup_candidate_b.is_file():
-        raise SubmissionError(
-            "--code-dir must contain setup/setup_emphatic.sh (or emphaticsoft/setup/setup_emphatic.sh)"
-        )
+        if not args.code_dir.exists():
+            raise SubmissionError(f"Code directory does not exist: {args.code_dir}")
+        if not args.code_dir.is_dir():
+            raise SubmissionError(f"Code directory is not a directory: {args.code_dir}")
+        setup_candidate_a = args.code_dir / "setup" / "setup_emphatic.sh"
+        setup_candidate_b = args.code_dir / "emphaticsoft" / "setup" / "setup_emphatic.sh"
+        if not setup_candidate_a.is_file() and not setup_candidate_b.is_file():
+            raise SubmissionError(
+                "--code-dir must contain setup/setup_emphatic.sh (or emphaticsoft/setup/setup_emphatic.sh)"
+            )
 
-    if not args.build_dir.exists():
-        raise SubmissionError(f"Build directory does not exist: {args.build_dir}")
-    if not args.build_dir.is_dir():
-        raise SubmissionError(f"Build directory is not a directory: {args.build_dir}")
+        if not args.build_dir.exists():
+            raise SubmissionError(f"Build directory does not exist: {args.build_dir}")
+        if not args.build_dir.is_dir():
+            raise SubmissionError(f"Build directory is not a directory: {args.build_dir}")
 
     if not args.user:
         raise SubmissionError("Grid user is undefined. Set USER or pass --user.")
@@ -148,6 +156,17 @@ def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[st
         raise SubmissionError(f"Config file not found: {args.config}")
     if not inputs:
         raise SubmissionError("At least one input ROOT file is required for reconstruction")
+
+
+def resolve_payload_tarball(args: argparse.Namespace, staging_dir: Path) -> Path:
+    """Return payload tarball path, creating one when not supplied explicitly."""
+    if args.payload_tarball is not None:
+        info(f"Using existing payload tarball: {args.payload_tarball}")
+        return args.payload_tarball
+
+    payload_tarball = create_payload_tarball(staging_dir, args.code_dir, args.build_dir)
+    info(f"Created payload tarball: {payload_tarball}")
+    return payload_tarball
 
 
 def build_generator_jobsub_command(
@@ -202,14 +221,11 @@ def submit_generator(args: argparse.Namespace) -> None:
     validate_generator_inputs(args)
 
     host_out_dir = args.output.resolve()
-    code_dir = args.code_dir
-    build_dir = args.build_dir
-
     info(f"Preparing generator submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
     staging_dir = create_local_staging_dir("gen")
-    payload_tarball = create_payload_tarball(staging_dir, code_dir, build_dir)
+    payload_tarball = resolve_payload_tarball(args, staging_dir)
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: render fcl then run art.
@@ -246,14 +262,11 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     validate_reconstruction_inputs(args, inputs)
 
     host_out_dir = args.output.resolve()
-    code_dir = args.code_dir
-    build_dir = args.build_dir
-
     info(f"Preparing reconstruction submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
     staging_dir = create_local_staging_dir("reco")
-    payload_tarball = create_payload_tarball(staging_dir, code_dir, build_dir)
+    payload_tarball = resolve_payload_tarball(args, staging_dir)
     file_list = stage_local_file(staging_dir, args.input_list)
     if not args.dry_run:
         file_list.write_text("\n".join(inputs) + "\n")
@@ -309,6 +322,16 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         help=(
             "Build tree included in the local payload tarball (with .git excluded). "
             f"If omitted, read from ${BUILD_DIR_ENV}."
+        ),
+    )
+    environment_args.add_argument(
+        "--payload-tarball",
+        dest="payload_tarball",
+        type=Path,
+        default=None,
+        help=(
+            "Use an existing payload tarball instead of creating one from --code-dir/--build-dir. "
+            "When set, code/build directory options are ignored for payload creation."
         ),
     )
     environment_args.add_argument("--user", default=os.environ.get("USER"))
@@ -469,17 +492,22 @@ def main() -> int:
     if args.test and args.smoke_test:
         parser.error("Use only one of --test or --smoke-test")
 
-    if args.code_dir is None:
-        code_dir_env = os.environ.get(CODE_DIR_ENV)
-        if not code_dir_env:
-            parser.error(f"Pass --code-dir or set {CODE_DIR_ENV}")
-        args.code_dir = Path(code_dir_env)
+    if args.payload_tarball is None:
+        if args.code_dir is None:
+            code_dir_env = os.environ.get(CODE_DIR_ENV)
+            if not code_dir_env:
+                parser.error(
+                    f"Pass --payload-tarball, or pass --code-dir, or set {CODE_DIR_ENV}"
+                )
+            args.code_dir = Path(code_dir_env)
 
-    if args.build_dir is None:
-        build_dir_env = os.environ.get(BUILD_DIR_ENV)
-        if not build_dir_env:
-            parser.error(f"Pass --build-dir or set {BUILD_DIR_ENV}")
-        args.build_dir = Path(build_dir_env)
+        if args.build_dir is None:
+            build_dir_env = os.environ.get(BUILD_DIR_ENV)
+            if not build_dir_env:
+                parser.error(
+                    f"Pass --payload-tarball, or pass --build-dir, or set {BUILD_DIR_ENV}"
+                )
+            args.build_dir = Path(build_dir_env)
 
     consolidate_debug_modes(args)
 
