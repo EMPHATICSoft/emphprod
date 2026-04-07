@@ -7,13 +7,13 @@
 - `gen`: generation workflow
 - `reco`: reconstruction workflow
 
-The script transfers payload directories with `jobsub_submit --tar_file_name tardir://...`, creates a robust worker wrapper, and runs `jobsub_submit`.
+The script creates one payload tarball (code + build, excluding `.git`), submits with `jobsub_submit --tar_file_name dropbox://... --use-cvmfs-dropbox`, generates a worker wrapper, and runs `jobsub_submit`.
 
 ## Common Pattern
 
 1. Validate local inputs and required commands.
 2. Create output directory in `/pnfs/emphatic/persistent/...`.
-3. Transfer both code and build directories through jobsub tar handling (`tardir://`).
+3. Create or reuse a single payload tarball containing both code and build directories.
 4. Generate worker wrapper script.
 5. Submit to grid (or print only in dry-run/test mode).
 
@@ -49,8 +49,9 @@ cat filelist.txt | emphgridutils/bin/submit_emph_art.py reco emphproduction/scri
 
 Shared options:
 
-- `--code-dir PATH`: source payload directory to transfer with `tardir://`; if omitted, the script reads `$EMPH_CODE_DIR`; this path must contain `setup/setup_emphatic.sh` (or `emphaticsoft/setup/setup_emphatic.sh`)
-- `--build-dir PATH`: build payload directory to transfer separately with `tardir://`; if omitted, the script reads `$EMPH_BUILD_DIR`
+- `--code-dir PATH`: source payload directory used to build the payload tarball; if omitted, the script reads `$EMPH_CODE_DIR`; this path must contain `setup/setup_emphatic.sh` (or `emphaticsoft/setup/setup_emphatic.sh`)
+- `--build-dir PATH`: build payload directory used to build the payload tarball; if omitted, the script reads `$EMPH_BUILD_DIR`
+- `--payload-tarball PATH`: reuse an existing payload tarball instead of creating one from `--code-dir`/`--build-dir`
 - `--user USERNAME`: grid username override
 - `--dry-run`: do not submit, only prepare/print
 - `--print-jobsub` or `--print_jobsub`: print full command argv
@@ -72,18 +73,26 @@ Reconstruction options:
 
 ## Notes
 
-- If you do not pass `--code-dir` and `--build-dir`, define both environment variables before running:
+- If you do not pass `--payload-tarball`, either pass `--code-dir` and `--build-dir` or define both environment variables before running:
 
 ```bash
 export EMPH_CODE_DIR=/path/to/emphaticsoft
 export EMPH_BUILD_DIR=/path/to/build
 ```
 
+- Worker setup order is:
+  1. `source setup_emphatic.sh`
+  2. `source setup_for_grid.sh`
+  3. `source setup_emphaticsoft` from the build area (if present)
+
+  This avoids using `setup_for_development` on read-only CVMFS payloads.
+
 - Use `--dry-run --print-jobsub` first when trying a new command. This lets you confirm what would be submitted before sending real jobs.
-- In dry-run output, confirm both transfer arguments are present: one `--tar_file_name tardir://...` for code and one for build.
+- In dry-run output, confirm payload arguments are present: `--tar_file_name dropbox://...` and `--use-cvmfs-dropbox`.
 - `--smoke-test` injects `EMPH_TEST_EVENTS=3` into the worker environment, and the wrapper translates that to `art -n 3 ...`.
 - Generated wrapper scripts and reconstruction input lists are written into a dedicated local staging directory under `staging_dir/`.
 - At the end of preparation/submission, the script prints that staging path so you can remove it when you are done.
 - If setup fails on a worker node, the generated wrapper prints clear diagnostics (missing files, missing environment variables, and whether `art` is available).
+- If generation fails with `phase1c_Unknown.gdml`, geometry is being selected from RunHistory with an unresolved target for that run. Use a run with valid RunHistory DB metadata or override `GeometryService` in the FHiCL to use explicit `GDMLFile`.
 - Prefer calling `submit_emph_art.py` directly.
 - `submitGenerator.sh` and `submitReconstruction.sh` still work for now, but they are temporary compatibility wrappers and will be removed later.
