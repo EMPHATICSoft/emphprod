@@ -29,6 +29,50 @@ safe_source() {
   fi
 }
 
+import_csh_environment() {
+  local script_path=$1
+  local label=$2
+  local env_dump
+
+  command -v tcsh >/dev/null 2>&1 || die "${label} looks like csh syntax but tcsh is not available"
+  env_dump=$(mktemp)
+
+  log "Importing environment from csh script ${script_path}"
+  tcsh -f -c "source ${script_path} >/dev/null; env" > "${env_dump}" || {
+    rm -f "${env_dump}"
+    die "Failed to source ${label} with tcsh"
+  }
+
+  while IFS='=' read -r name value; do
+    [[ -n ${name} ]] || continue
+    case "${name}" in
+      PWD|OLDPWD|SHLVL|_)
+        continue
+        ;;
+    esac
+    export "${name}=${value}"
+  done < "${env_dump}"
+
+  rm -f "${env_dump}"
+  log "Imported environment from ${label}"
+}
+
+source_setup_script() {
+  local script_path=$1
+  local label=$2
+
+  if [[ -f ${script_path}.sh ]]; then
+    safe_source "${script_path}.sh" "${label}.sh"
+    return
+  fi
+
+  if grep -q "setenv" "${script_path}"; then
+    import_csh_environment "${script_path}" "${label}"
+  else
+    safe_source "${script_path}" "${label}"
+  fi
+}
+
 require_env() {
   local var_name=$1
   [[ -n ${!var_name:-} ]] || die "Required environment variable is missing: ${var_name}"
@@ -133,7 +177,7 @@ cd "${build_dir}"
 log "Changed directory to build area: ${build_dir}"
 
 if [[ -f setup_emphaticsoft ]]; then
-  safe_source "setup_emphaticsoft" "setup_emphaticsoft"
+  source_setup_script "setup_emphaticsoft" "setup_emphaticsoft"
 else
   die "Missing setup_emphaticsoft in build area: ${build_dir}"
 fi
