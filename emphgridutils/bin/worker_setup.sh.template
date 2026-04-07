@@ -130,7 +130,18 @@ safe_source "${source_dir}/setup/setup_emphatic.sh" "setup_emphatic.sh"
 cd "${build_dir}"
 log "Changed to build directory: ${build_dir}"
 
-safe_source "${source_dir}/ups/setup_for_development" "setup_for_development" -p
+# setup_for_grid.sh installs bash shims for setenv/tnotnull/etc. and sets
+# CETPKG_SOURCE + CETPKG_BUILD.  It does NOT write any files, so it is safe
+# on the read-only CVMFS mount that holds the payload.
+safe_source "${source_dir}/setup/setup_for_grid.sh" "setup_for_grid.sh"
+
+# setup_emphaticsoft is pre-generated at build time; it uses the setenv shim
+# installed by setup_for_grid.sh so it works in bash without tcsh.
+if [[ -f setup_emphaticsoft ]]; then
+  safe_source "$(pwd)/setup_emphaticsoft" "setup_emphaticsoft"
+else
+  log "WARNING: setup_emphaticsoft not found in build area; skipping"
+fi
 
 command -v art >/dev/null 2>&1 || die "'art' not found after setup. Check setup_emphatic.sh and build payload products."
 log "art found at: $(command -v art)"
