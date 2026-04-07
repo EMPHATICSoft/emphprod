@@ -1,0 +1,116 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+log() {
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+}
+
+require_env() {
+  local var_name=$1
+  [[ -n ${!var_name:-} ]] || die "Required environment variable is missing: ${var_name}"
+}
+
+on_error() {
+  local rc=$?
+  echo "ERROR: command failed at line $1 (exit code ${rc})" >&2
+  echo "PWD=$(pwd)" >&2
+  echo "PATH=${PATH}" >&2
+  type -a art >&2 || true
+  exit ${rc}
+}
+trap 'on_error ${LINENO}' ERR
+
+# Resolve source area for setup_emphatic.sh. We accept both common transfer layouts:
+# 1) INPUT_TAR_DIR_LOCAL already contains the emphaticsoft tree
+# 2) INPUT_TAR_DIR_LOCAL contains one top directory that contains the emphaticsoft tree
+resolve_source_dir() {
+  local base=$1
+
+  if [[ -f ${base}/setup/setup_emphatic.sh ]]; then
+    echo "${base}"
+    return
+  fi
+
+  if [[ -f ${base}/emphaticsoft/setup/setup_emphatic.sh ]]; then
+    echo "${base}/emphaticsoft"
+    return
+  fi
+
+  local candidate
+  for candidate in "${base}"/*; do
+    [[ -d ${candidate} ]] || continue
+    if [[ -f ${candidate}/setup/setup_emphatic.sh ]]; then
+      echo "${candidate}"
+      return
+    fi
+    if [[ -f ${candidate}/emphaticsoft/setup/setup_emphatic.sh ]]; then
+      echo "${candidate}/emphaticsoft"
+      return
+    fi
+  done
+
+  die "Could not locate setup/setup_emphatic.sh under ${base}. Check --code-dir transfer contents."
+}
+
+# Resolve build area for setup_emphaticsoft. We accept build root directly or one nested level.
+resolve_build_dir() {
+  local base=$1
+
+  if [[ -f ${base}/setup_emphaticsoft ]]; then
+    echo "${base}"
+    return
+  fi
+
+  local candidate
+  for candidate in "${base}"/*; do
+    [[ -d ${candidate} ]] || continue
+    if [[ -f ${candidate}/setup_emphaticsoft ]]; then
+      echo "${candidate}"
+      return
+    fi
+  done
+
+  die "Could not locate setup_emphaticsoft under ${base}. Check --build-dir transfer contents."
+}
+
+require_env INPUT_TAR_DIR_LOCAL
+require_env INPUT_TAR_DIR_LOCAL_1
+require_env CONDOR_DIR___OUTPUT_TAG__
+require_env CONDOR_DIR_INPUT
+require_env PROCESS
+
+source_dir=$(resolve_source_dir "${INPUT_TAR_DIR_LOCAL}")
+build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL_1}")
+setup_emphatic=${source_dir}/setup/setup_emphatic.sh
+
+log "Sourcing setup_emphatic.sh from ${setup_emphatic}"
+source "${setup_emphatic}"
+log "Finished setup_emphatic.sh"
+
+export CETPKG_SOURCE="${source_dir}"
+export CETPKG_BUILD="${build_dir}"
+log "Set CETPKG_SOURCE=${CETPKG_SOURCE}"
+log "Set CETPKG_BUILD=${CETPKG_BUILD}"
+
+cd "${build_dir}"
+log "Changed directory to build area: ${build_dir}"
+
+if [[ -f setup_emphaticsoft ]]; then
+  log "Sourcing local setup_emphaticsoft from build area"
+  source setup_emphaticsoft
+else
+  die "Missing setup_emphaticsoft in build area: ${build_dir}"
+fi
+
+command -v art >/dev/null 2>&1 || die "'art' not found after setup. Check setup_emphatic.sh and build payload products."
+log "art found at: $(command -v art)"
+
+cd "${CONDOR_DIR___OUTPUT_TAG__}"
+mkdir -p "job_${PROCESS}"
+cd "job_${PROCESS}"
+log "Running in output directory: $(pwd)"

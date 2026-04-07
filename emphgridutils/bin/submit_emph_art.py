@@ -7,7 +7,7 @@ This CLI has two modes:
 
 The high-level flow in both modes is:
 1. Validate arguments and required local tools.
-2. Create output directory and tarball payload.
+2. Create output directory and define payload transfers.
 3. Build a worker-node wrapper script.
 4. Assemble ``jobsub_submit`` arguments and run (or print in dry-run).
 """
@@ -29,19 +29,14 @@ from submit_emph_art_core import (
     ensure_command_available,
     ensure_output_dir,
     info,
-    make_tarball,
-    render_wrapper_prologue,
+    render_worker_setup,
     run_command,
     warn,
     write_wrapper_script,
 )
 
-
-def default_code_dir() -> Path:
-    """Return the default top-level code directory to tar for worker payloads."""
-    # script path is emphprod/emphgridutils/bin/submit_emph_art.py
-    # the repository root payload directory is three levels above this script
-    return Path(__file__).resolve().parents[3]
+CODE_DIR_ENV = "EMPH_CODE_DIR"
+BUILD_DIR_ENV = "EMPH_BUILD_DIR"
 
 
 def print_env(args: argparse.Namespace) -> None:
@@ -49,34 +44,62 @@ def print_env(args: argparse.Namespace) -> None:
     keys = [
         "USER",
         "PATH",
+        CODE_DIR_ENV,
+        BUILD_DIR_ENV,
         "INPUT_TAR_DIR_LOCAL",
         "CONDOR_DIR_INPUT",
         "CONDOR_DIR_ROOT_OUTPUT",
     ]
     print("=== Environment Summary ===")
     print(f"CODE_DIR={args.code_dir}")
+    print(f"BUILD_DIR={args.build_dir}")
     for key in keys:
         print(f"{key}={os.environ.get(key, '<unset>')}")
 
 
-def normalize_debug_modes(args: argparse.Namespace) -> None:
-    """Normalize convenience flags into their canonical debug behavior."""
-    if args.test:
-        info("--test requested, enabling dry-run mode")
-        args.dry_run = True
-        args.print_jobsub = True
+def consolidate_debug_modes(args: argparse.Namespace) -> None:
+    """Apply shorthand debug flags.
+
+    Rule:
+    - `--test` means "show me exactly what would be submitted, but do not submit".
+    """
+    if not args.test:
+        if args.smoke_test:
+            args.print_jobsub = True
+            info("Smoke-test mode enabled: real submit with one job and 3 events")
+        return
+
+    # `--test` is a convenience alias for safe inspection mode.
+    args.dry_run = True
+    args.print_jobsub = True
+    info("Test mode enabled: using --dry-run and --print-jobsub")
 
 
 def validate_common_inputs(args: argparse.Namespace) -> None:
     """Validate shared prerequisites used by both submission modes."""
+    args.code_dir = args.code_dir.resolve()
+    args.build_dir = args.build_dir.resolve()
+
     if not args.code_dir.exists():
         raise SubmissionError(f"Code directory does not exist: {args.code_dir}")
     if not args.code_dir.is_dir():
         raise SubmissionError(f"Code directory is not a directory: {args.code_dir}")
+    setup_candidate_a = args.code_dir / "setup" / "setup_emphatic.sh"
+    setup_candidate_b = args.code_dir / "emphaticsoft" / "setup" / "setup_emphatic.sh"
+    if not setup_candidate_a.is_file() and not setup_candidate_b.is_file():
+        raise SubmissionError(
+            "--code-dir must contain setup/setup_emphatic.sh (or emphaticsoft/setup/setup_emphatic.sh)"
+        )
+
+    if not args.build_dir.exists():
+        raise SubmissionError(f"Build directory does not exist: {args.build_dir}")
+    if not args.build_dir.is_dir():
+        raise SubmissionError(f"Build directory is not a directory: {args.build_dir}")
+
     if not args.user:
         raise SubmissionError("Grid user is undefined. Set USER or pass --user.")
 
-    for command in ("bash", "tar", "jobsub_submit"):
+    for command in ("bash", "jobsub_submit"):
         ensure_command_available(command)
 
 
@@ -98,17 +121,25 @@ def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[st
         raise SubmissionError("At least one input ROOT file is required for reconstruction")
 
 
-def build_generator_jobsub_command(args: argparse.Namespace, host_out_dir: Path, wrapper_path: Path) -> list[str]:
+def build_generator_jobsub_command(
+    args: argparse.Namespace,
+    host_out_dir: Path,
+    wrapper_path: Path,
+    code_dir: Path,
+    build_dir: Path,
+) -> list[str]:
     """Build the full ``jobsub_submit`` argv for generator mode."""
+    n_jobs = 1 if args.smoke_test else args.njobs
+    test_events = 3 if args.smoke_test else None
     return [
         "jobsub_submit",
         "-N",
-        str(args.njobs),
+        str(n_jobs),
         "-f",
         f"dropbox://{args.generator.resolve()}",
         "-f",
         f"dropbox://{args.template.resolve()}",
-        *basic_jobsub_args(host_out_dir),
+        *basic_jobsub_args(host_out_dir, code_dir, build_dir, test_events=test_events),
         f"file://{wrapper_path}",
     ]
 
@@ -119,17 +150,21 @@ def build_reconstruction_jobsub_command(
     wrapper_path: Path,
     file_list: Path,
     n_jobs: int,
+    code_dir: Path,
+    build_dir: Path,
 ) -> list[str]:
     """Build the full ``jobsub_submit`` argv for reconstruction mode."""
+    effective_jobs = 1 if args.smoke_test else n_jobs
+    test_events = 3 if args.smoke_test else None
     return [
         "jobsub_submit",
         "-N",
-        str(n_jobs),
+        str(effective_jobs),
         "-f",
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
-        *basic_jobsub_args(host_out_dir),
+        *basic_jobsub_args(host_out_dir, code_dir, build_dir, test_events=test_events),
         f"file://{wrapper_path}",
     ]
 
@@ -140,24 +175,26 @@ def submit_generator(args: argparse.Namespace) -> None:
     validate_generator_inputs(args)
 
     host_out_dir = args.output.resolve()
-    code_dir = args.code_dir.resolve()
+    code_dir = args.code_dir
+    build_dir = args.build_dir
 
     info(f"Preparing generator submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
-    make_tarball(code_dir, host_out_dir, user=args.user, dry_run=args.dry_run)
 
     wrapper_path = Path(args.wrapper).resolve()
-    prologue = render_wrapper_prologue(WrapperContext(code_dir_name=code_dir.name))
+    prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: render fcl then run art.
     body = [
+        "ART_EVENT_ARGS=()",
+        "if [[ -n ${EMPH_TEST_EVENTS:-} ]]; then ART_EVENT_ARGS=(-n \"${EMPH_TEST_EVENTS}\"); fi",
         f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} ${{CONDOR_DIR_INPUT}}/{args.template.name} > config_${{PROCESS}}.fcl || exit 2",
         "echo \"***** finished generating template config file *****\"",
-        f"art -c config_${{PROCESS}}.fcl -o {args.outfile} || exit 3",
+        f"art ${{ART_EVENT_ARGS[@]}} -c config_${{PROCESS}}.fcl -o {args.outfile} || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
 
-    cmd = build_generator_jobsub_command(args, host_out_dir, wrapper_path)
+    cmd = build_generator_jobsub_command(args, host_out_dir, wrapper_path, code_dir, build_dir)
     if args.print_jobsub:
         print(command_to_string(cmd))
     run_command(cmd, dry_run=args.dry_run, print_cmd=not args.print_jobsub)
@@ -179,28 +216,38 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     validate_reconstruction_inputs(args, inputs)
 
     host_out_dir = args.output.resolve()
-    code_dir = args.code_dir.resolve()
+    code_dir = args.code_dir
+    build_dir = args.build_dir
 
     info(f"Preparing reconstruction submission to {host_out_dir}")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
-    make_tarball(code_dir, host_out_dir, user=args.user, dry_run=args.dry_run)
 
     file_list = Path(args.input_list).resolve()
     if not args.dry_run:
         file_list.write_text("\n".join(inputs) + "\n")
 
     wrapper_path = Path(args.wrapper).resolve()
-    prologue = render_wrapper_prologue(WrapperContext(code_dir_name=code_dir.name))
+    prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: pick job-specific input then run art.
     body = [
+        "ART_EVENT_ARGS=()",
+        "if [[ -n ${EMPH_TEST_EVENTS:-} ]]; then ART_EVENT_ARGS=(-n \"${EMPH_TEST_EVENTS}\"); fi",
         f"INPUT_FILE=$(head -n $((PROCESS+1)) ${{CONDOR_DIR_INPUT}}/{file_list.name} | tail -n -1) || exit 2",
         "echo \"***** finished finding input file *****\"",
-        f"art -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}} || exit 3",
+        f"art ${{ART_EVENT_ARGS[@]}} -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}} || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
 
-    cmd = build_reconstruction_jobsub_command(args, host_out_dir, wrapper_path, file_list, len(inputs))
+    cmd = build_reconstruction_jobsub_command(
+        args,
+        host_out_dir,
+        wrapper_path,
+        file_list,
+        len(inputs),
+        code_dir,
+        build_dir,
+    )
     if args.print_jobsub:
         print(command_to_string(cmd))
     run_command(cmd, dry_run=args.dry_run, print_cmd=not args.print_jobsub)
@@ -211,7 +258,27 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
     environment_args = parser.add_argument_group(
         "Environment options", "Configure local code payload and identity."
     )
-    environment_args.add_argument("--code-dir", dest="code_dir", type=Path, default=default_code_dir())
+    environment_args.add_argument(
+        "--code-dir",
+        dest="code_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory transferred with --tar_file_name tardir://... as the source payload. "
+            f"If omitted, read from ${CODE_DIR_ENV}. This directory must contain "
+            "setup/setup_emphatic.sh (or emphaticsoft/setup/setup_emphatic.sh)."
+        ),
+    )
+    environment_args.add_argument(
+        "--build-dir",
+        dest="build_dir",
+        type=Path,
+        default=None,
+        help=(
+            "Build directory transferred separately with --tar_file_name tardir://... . "
+            f"If omitted, read from ${BUILD_DIR_ENV}."
+        ),
+    )
     environment_args.add_argument("--user", default=os.environ.get("USER"))
 
     debugging_args = parser.add_argument_group(
@@ -233,6 +300,12 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         help="Print selected environment values before submission",
     )
     debugging_args.add_argument("--test", action="store_true", help="Alias for --dry-run with --print-jobsub")
+    debugging_args.add_argument(
+        "--smoke-test",
+        dest="smoke_test",
+        action="store_true",
+        help="Submit one real test job and set ART to run only 3 events",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -289,7 +362,22 @@ def main() -> int:
     """CLI entrypoint returning process-style exit code."""
     parser = build_parser()
     args = parser.parse_args()
-    normalize_debug_modes(args)
+    if args.test and args.smoke_test:
+        parser.error("Use only one of --test or --smoke-test")
+
+    if args.code_dir is None:
+        code_dir_env = os.environ.get(CODE_DIR_ENV)
+        if not code_dir_env:
+            parser.error(f"Pass --code-dir or set {CODE_DIR_ENV}")
+        args.code_dir = Path(code_dir_env)
+
+    if args.build_dir is None:
+        build_dir_env = os.environ.get(BUILD_DIR_ENV)
+        if not build_dir_env:
+            parser.error(f"Pass --build-dir or set {BUILD_DIR_ENV}")
+        args.build_dir = Path(build_dir_env)
+
+    consolidate_debug_modes(args)
 
     if args.print_env:
         print_env(args)

@@ -10,16 +10,13 @@ This module contains reusable functionality used by ``submit_emph_art.py``:
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
-import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 OUT_DIR_TAG = "ROOT_OUTPUT"
-TARBALL_NAME = "myEmphaticsoft.tar.gz"
 
 
 class SubmissionError(RuntimeError):
@@ -40,7 +37,6 @@ def warn(message: str) -> None:
 class WrapperContext:
     """Inputs required to render the worker-node wrapper prologue."""
 
-    code_dir_name: str
     output_tag: str = OUT_DIR_TAG
 
 
@@ -63,123 +59,13 @@ def ensure_output_dir(host_out_dir: Path, dry_run: bool = False) -> None:
         host_out_dir.mkdir(parents=True)
 
 
-def make_tarball(
-    code_dir: Path,
-    host_out_dir: Path,
-    user: str | None = None,
-    dry_run: bool = False,
-) -> Path:
-    """Create and copy the user payload tarball into the submission output area."""
-    user_name = user or os.environ.get("USER")
-    if not user_name:
-        raise SubmissionError("USER environment variable is required to build safe scratch path")
-
-    safe_scratch_dir = Path(f"/exp/emph/app/users/{user_name}")
-    tarball_path = safe_scratch_dir / TARBALL_NAME
-
-    if tarball_path.exists() and not dry_run:
-        tarball_path.unlink()
-
-    parent_dir = code_dir.parent
-    root_name = code_dir.name
-
-    if not dry_run:
-        with tarfile.open(tarball_path, "w:gz") as tar:
-            tar.add(parent_dir / root_name, arcname=root_name)
-
-    dest = host_out_dir / TARBALL_NAME
-    if not dry_run:
-        shutil.copy2(tarball_path, dest)
-
-    if not dry_run and not dest.exists():
-        raise SubmissionError(f"Failed to copy tarball to {dest}")
-
-    return dest
-
-
-def render_wrapper_prologue(ctx: WrapperContext) -> str:
-    """Render robust worker-node shell setup used before running art.
-
-    The rendered script performs strict checks, environment setup, and early
-    diagnostics so setup failures are obvious in grid logs.
-    """
-    out_tag = ctx.output_tag
-    code_name = ctx.code_dir_name
-    lines = [
-        "#!/usr/bin/bash",
-        "set -euo pipefail",
-        "",
-        "die() {",
-        "  echo \"ERROR: $*\" >&2",
-        "  exit 1",
-        "}",
-        "",
-        "log() {",
-        "  echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*\"",
-        "}",
-        "",
-        "require_env() {",
-        "  local var_name=$1",
-        "  [[ -n ${!var_name:-} ]] || die \"Required environment variable is missing: ${var_name}\"",
-        "}",
-        "",
-        "on_error() {",
-        "  local rc=$?",
-        "  echo \"ERROR: command failed at line $1 (exit code ${rc})\" >&2",
-        "  echo \"PWD=$(pwd)\" >&2",
-        "  echo \"PATH=${PATH}\" >&2",
-        "  type -a art >&2 || true",
-        "  exit ${rc}",
-        "}",
-        "trap 'on_error ${LINENO}' ERR",
-        "",
-        "require_env INPUT_TAR_DIR_LOCAL",
-        f"require_env CONDOR_DIR_{out_tag}",
-        "require_env CONDOR_DIR_INPUT",
-        "require_env PROCESS",
-        "",
-        f"payload_dir=${{INPUT_TAR_DIR_LOCAL}}/{code_name}",
-        "setup_emphatic=${payload_dir}/emphaticsoft/setup/setup_emphatic.sh",
-        "setup_for_grid=${payload_dir}/emphaticsoft/setup/setup_for_grid.sh",
-        "",
-        "[[ -f ${setup_emphatic} ]] || die \"Missing setup script: ${setup_emphatic}\"",
-        "[[ -f ${setup_for_grid} ]] || die \"Missing setup script: ${setup_for_grid}\"",
-        "",
-        "if [[ -d ${payload_dir}/opt/build ]]; then",
-        "  build_dir=${payload_dir}/opt/build",
-        "elif [[ -d ${payload_dir}/build ]]; then",
-        "  build_dir=${payload_dir}/build",
-        "else",
-        "  die \"Could not find build directory under ${payload_dir} (checked opt/build and build)\"",
-        "fi",
-        "",
-        "log \"Sourcing setup_emphatic.sh from ${setup_emphatic}\"",
-        "source ${setup_emphatic}",
-        "log \"Finished setup_emphatic.sh\"",
-        "",
-        "cd ${build_dir}",
-        "log \"Changed directory to build area: ${build_dir}\"",
-        "",
-        "log \"Sourcing setup_for_grid.sh from ${setup_for_grid}\"",
-        "source ${setup_for_grid}",
-        "log \"Finished setup_for_grid.sh\"",
-        "",
-        "if [[ -f setup_emphaticsoft ]]; then",
-        "  log \"Sourcing local setup_emphaticsoft from build area\"",
-        "  source setup_emphaticsoft",
-        "else",
-        "  log \"setup_emphaticsoft not found in build area; skipping\"",
-        "fi",
-        "",
-        "command -v art >/dev/null 2>&1 || die \"'art' not found after setup. Check setup_emphatic.sh/setup_for_grid.sh and payload build products.\"",
-        "log \"art found at: $(command -v art)\"",
-        "",
-        f"cd ${{CONDOR_DIR_{out_tag}}}",
-        "mkdir -p job_${PROCESS}",
-        "cd job_${PROCESS}",
-        "log \"Running in output directory: $(pwd)\"",
-    ]
-    return "\n".join(lines) + "\n"
+def render_worker_setup(ctx: WrapperContext) -> str:
+    """Render worker-node shell setup from a checked-in template file."""
+    template_path = Path(__file__).with_name("worker_setup.sh.template")
+    if not template_path.is_file():
+        raise SubmissionError(f"Missing worker node setup template: {template_path}")
+    content = template_path.read_text()
+    return content.replace("__OUTPUT_TAG__", ctx.output_tag)
 
 
 def write_wrapper_script(path: Path, prologue: str, body_lines: Sequence[str]) -> None:
@@ -189,18 +75,28 @@ def write_wrapper_script(path: Path, prologue: str, body_lines: Sequence[str]) -
     path.chmod(0o755)
 
 
-def basic_jobsub_args(host_out_dir: Path) -> list[str]:
+def basic_jobsub_args(
+    host_out_dir: Path,
+    code_dir: Path,
+    build_dir: Path,
+    test_events: int | None = None,
+) -> list[str]:
     """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes."""
-    return [
+    args = [
         "-d",
         OUT_DIR_TAG,
         str(host_out_dir),
         "-l",
         "+SingularityImage=\"/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-wn-sl7:latest\"",
         "--tar_file_name",
-        f"dropbox://{host_out_dir}/{TARBALL_NAME}",
+        f"tardir://{code_dir}",
+        "--tar_file_name",
+        f"tardir://{build_dir}",
         "--use-cvmfs-dropbox",
     ]
+    if test_events is not None:
+        args.extend(["-e", f"EMPH_TEST_EVENTS={test_events}"])
+    return args
 
 
 def ensure_command_available(command: str) -> None:
