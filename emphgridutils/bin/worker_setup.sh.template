@@ -16,11 +16,12 @@ safe_source() {
   local rc=0
 
   log "Sourcing ${label} from ${script_path}"
-  set +e
-  # Some setup scripts return non-zero for non-fatal checks; validate environment after sourcing.
+  # Some setup scripts rely on unset vars or return non-zero for non-fatal checks.
+  # Temporarily relax -e/-u while sourcing, then restore strict mode.
+  set +eu
   source "${script_path}"
   rc=$?
-  set -e
+  set -eu
   if [[ ${rc} -ne 0 ]]; then
     log "${label} returned non-zero (${rc}); continuing with post-setup validation"
   else
@@ -39,6 +40,19 @@ on_error() {
   echo "PWD=$(pwd)" >&2
   echo "PATH=${PATH}" >&2
   type -a art >&2 || true
+
+  # Ensure stage-out has a concrete source path even on early setup failures.
+  if [[ -n ${CONDOR_DIR___OUTPUT_TAG__:-} && -n ${PROCESS:-} ]]; then
+    local job_output_dir="${CONDOR_DIR___OUTPUT_TAG__}/job_${PROCESS}"
+    mkdir -p "${job_output_dir}" || true
+    {
+      echo "wrapper_failed=1"
+      echo "exit_code=${rc}"
+      echo "line=$1"
+      echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "${job_output_dir}/wrapper_failure.txt" || true
+  fi
+
   exit ${rc}
 }
 trap 'on_error ${LINENO}' ERR
@@ -101,6 +115,10 @@ require_env CONDOR_DIR___OUTPUT_TAG__
 require_env CONDOR_DIR_INPUT
 require_env PROCESS
 
+job_output_dir="${CONDOR_DIR___OUTPUT_TAG__}/job_${PROCESS}"
+mkdir -p "${job_output_dir}"
+log "Prepared output directory: ${job_output_dir}"
+
 source_dir=$(resolve_source_dir "${INPUT_TAR_DIR_LOCAL}")
 build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL}")
 setup_emphatic=${source_dir}/setup/setup_emphatic.sh
@@ -124,6 +142,5 @@ command -v art >/dev/null 2>&1 || die "'art' not found after setup. Check setup_
 log "art found at: $(command -v art)"
 
 cd "${CONDOR_DIR___OUTPUT_TAG__}"
-mkdir -p "job_${PROCESS}"
 cd "job_${PROCESS}"
 log "Running in output directory: $(pwd)"
