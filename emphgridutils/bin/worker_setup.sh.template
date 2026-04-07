@@ -10,6 +10,24 @@ log() {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
 }
 
+safe_source() {
+  local script_path=$1
+  local label=$2
+  local rc=0
+
+  log "Sourcing ${label} from ${script_path}"
+  set +e
+  # Some setup scripts return non-zero for non-fatal checks; validate environment after sourcing.
+  source "${script_path}"
+  rc=$?
+  set -e
+  if [[ ${rc} -ne 0 ]]; then
+    log "${label} returned non-zero (${rc}); continuing with post-setup validation"
+  else
+    log "Finished ${label}"
+  fi
+}
+
 require_env() {
   local var_name=$1
   [[ -n ${!var_name:-} ]] || die "Required environment variable is missing: ${var_name}"
@@ -79,18 +97,14 @@ resolve_build_dir() {
 }
 
 require_env INPUT_TAR_DIR_LOCAL
-require_env INPUT_TAR_DIR_LOCAL_1
 require_env CONDOR_DIR___OUTPUT_TAG__
 require_env CONDOR_DIR_INPUT
 require_env PROCESS
 
 source_dir=$(resolve_source_dir "${INPUT_TAR_DIR_LOCAL}")
-build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL_1}")
+build_dir=$(resolve_build_dir "${INPUT_TAR_DIR_LOCAL}")
 setup_emphatic=${source_dir}/setup/setup_emphatic.sh
-
-log "Sourcing setup_emphatic.sh from ${setup_emphatic}"
-source "${setup_emphatic}"
-log "Finished setup_emphatic.sh"
+safe_source "${setup_emphatic}" "setup_emphatic.sh"
 
 export CETPKG_SOURCE="${source_dir}"
 export CETPKG_BUILD="${build_dir}"
@@ -101,8 +115,7 @@ cd "${build_dir}"
 log "Changed directory to build area: ${build_dir}"
 
 if [[ -f setup_emphaticsoft ]]; then
-  log "Sourcing local setup_emphaticsoft from build area"
-  source setup_emphaticsoft
+  safe_source "setup_emphaticsoft" "setup_emphaticsoft"
 else
   die "Missing setup_emphaticsoft in build area: ${build_dir}"
 fi

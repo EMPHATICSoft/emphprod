@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -75,23 +76,38 @@ def write_wrapper_script(path: Path, prologue: str, body_lines: Sequence[str]) -
     path.chmod(0o755)
 
 
+def _exclude_vcs_paths(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Exclude VCS metadata from payload tarball uploads."""
+    if ".git" in Path(tarinfo.name).parts:
+        return None
+    return tarinfo
+
+
+def create_payload_tarball(staging_dir: Path, code_dir: Path, build_dir: Path) -> Path:
+    """Create a single tarball containing code and build trees for worker setup."""
+    payload_tarball = staging_dir / "emph_payload.tar.gz"
+    with tarfile.open(payload_tarball, "w:gz") as archive:
+        archive.add(code_dir, arcname=code_dir.name, filter=_exclude_vcs_paths)
+        archive.add(build_dir, arcname=build_dir.name, filter=_exclude_vcs_paths)
+    return payload_tarball
+
+
 def basic_jobsub_args(
     host_out_dir: Path,
-    code_dir: Path,
-    build_dir: Path,
+    payload_tarball: Path,
     test_events: int | None = None,
 ) -> list[str]:
     """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes."""
     args = [
+        "-G",
+        "emphatic",
         "-d",
         OUT_DIR_TAG,
         str(host_out_dir),
         "-l",
         "+SingularityImage=\"/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-wn-sl7:latest\"",
         "--tar_file_name",
-        f"tardir://{code_dir}",
-        "--tar_file_name",
-        f"tardir://{build_dir}",
+        f"dropbox://{payload_tarball}",
         "--use-cvmfs-dropbox",
     ]
     if test_events is not None:

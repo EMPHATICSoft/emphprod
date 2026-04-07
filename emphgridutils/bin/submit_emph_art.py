@@ -27,6 +27,7 @@ from submit_emph_art_core import (
     basic_jobsub_args,
     command_to_string,
     convert_pnfs_to_xrootd,
+    create_payload_tarball,
     ensure_command_available,
     ensure_output_dir,
     info,
@@ -78,7 +79,7 @@ def stage_local_file(staging_dir: Path, requested_name: str) -> Path:
 def print_staging_dir(staging_dir: Path) -> None:
     """Tell the user where generated local artifacts were written."""
     info(f"Local staging directory: {staging_dir}")
-    info("Remove that directory when you no longer need the generated wrapper/input-list files")
+    info("Remove that directory when you no longer need the generated wrapper/input-list/payload-tarball files")
 
 
 def consolidate_debug_modes(args: argparse.Namespace) -> None:
@@ -86,7 +87,11 @@ def consolidate_debug_modes(args: argparse.Namespace) -> None:
 
     Rule:
     - `--test` means "show me exactly what would be submitted, but do not submit".
+    - `--print-env` prints diagnostics without submission.
     """
+    if args.print_env:
+        args.dry_run = True
+
     if not args.test:
         if args.smoke_test:
             args.print_jobsub = True
@@ -149,8 +154,7 @@ def build_generator_jobsub_command(
     args: argparse.Namespace,
     host_out_dir: Path,
     wrapper_path: Path,
-    code_dir: Path,
-    build_dir: Path,
+    payload_tarball: Path,
 ) -> list[str]:
     """Build the full ``jobsub_submit`` argv for generator mode."""
     n_jobs = 1 if args.smoke_test else args.njobs
@@ -163,7 +167,7 @@ def build_generator_jobsub_command(
         f"dropbox://{args.generator.resolve()}",
         "-f",
         f"dropbox://{args.template.resolve()}",
-        *basic_jobsub_args(host_out_dir, code_dir, build_dir, test_events=test_events),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events),
         f"file://{wrapper_path}",
     ]
 
@@ -174,8 +178,7 @@ def build_reconstruction_jobsub_command(
     wrapper_path: Path,
     file_list: Path,
     n_jobs: int,
-    code_dir: Path,
-    build_dir: Path,
+    payload_tarball: Path,
 ) -> list[str]:
     """Build the full ``jobsub_submit`` argv for reconstruction mode."""
     effective_jobs = 1 if args.smoke_test else n_jobs
@@ -188,7 +191,7 @@ def build_reconstruction_jobsub_command(
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
-        *basic_jobsub_args(host_out_dir, code_dir, build_dir, test_events=test_events),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events),
         f"file://{wrapper_path}",
     ]
 
@@ -206,6 +209,7 @@ def submit_generator(args: argparse.Namespace) -> None:
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
     staging_dir = create_local_staging_dir("gen")
+    payload_tarball = create_payload_tarball(staging_dir, code_dir, build_dir)
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: render fcl then run art.
@@ -220,7 +224,7 @@ def submit_generator(args: argparse.Namespace) -> None:
     write_wrapper_script(wrapper_path, prologue, body)
     print_staging_dir(staging_dir)
 
-    cmd = build_generator_jobsub_command(args, host_out_dir, wrapper_path, code_dir, build_dir)
+    cmd = build_generator_jobsub_command(args, host_out_dir, wrapper_path, payload_tarball)
     if args.print_jobsub:
         print(command_to_string(cmd))
     run_command(cmd, dry_run=args.dry_run, print_cmd=not args.print_jobsub)
@@ -249,6 +253,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     ensure_output_dir(host_out_dir, dry_run=args.dry_run)
 
     staging_dir = create_local_staging_dir("reco")
+    payload_tarball = create_payload_tarball(staging_dir, code_dir, build_dir)
     file_list = stage_local_file(staging_dir, args.input_list)
     if not args.dry_run:
         file_list.write_text("\n".join(inputs) + "\n")
@@ -273,8 +278,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
         wrapper_path,
         file_list,
         len(inputs),
-        code_dir,
-        build_dir,
+        payload_tarball,
     )
     if args.print_jobsub:
         print(command_to_string(cmd))
@@ -292,7 +296,7 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "Source payload directory transferred with tardir://. "
+            "Source tree included in the local payload tarball (with .git excluded). "
             f"If omitted, read from ${CODE_DIR_ENV}. Must contain "
             "setup/setup_emphatic.sh or emphaticsoft/setup/setup_emphatic.sh."
         ),
@@ -303,7 +307,7 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "Build directory transferred separately with tardir://. "
+            "Build tree included in the local payload tarball (with .git excluded). "
             f"If omitted, read from ${BUILD_DIR_ENV}."
         ),
     )
