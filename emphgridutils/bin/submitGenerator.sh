@@ -1,6 +1,8 @@
 #!/bin/bash
 #submitGenerator.sh: Submit an ART job that takes no input to the grid
 
+set -euo pipefail
+
 #Help text
 if [[ $1 == "-h" || $1 == "--help" || $# < 2 ]]; then
   echo "Usage: submitGenerator.sh template.fcl generator.sh nJobs [output directory]"
@@ -17,6 +19,21 @@ templateConfig=$1
 generatorScript=$2
 nJobs=$3
 
+if [[ ! -f ${templateConfig} ]]; then
+  echo "Template config not found: ${templateConfig}" >&2
+  exit 2
+fi
+
+if [[ ! -f ${generatorScript} ]]; then
+  echo "Generator script not found: ${generatorScript}" >&2
+  exit 2
+fi
+
+if [[ ! ${nJobs} =~ ^[1-9][0-9]*$ ]]; then
+  echo "nJobs must be a positive integer, got: ${nJobs}" >&2
+  exit 2
+fi
+
 #Figure out where code comes from and where to put temporary files
 outFileName="testSimulation.root"
 gridScriptName="basicSimulation.sh"
@@ -32,6 +49,7 @@ checkOutputDir $hostOutDir
 makeOutputDirectory $hostOutDir
 makeTarball $codeDir $hostOutDir
 makeWrapperBoilerplate $codeDir > ${gridScriptName} #Overwrite grid script if it already exists from a previous job submission
+chmod +x ${gridScriptName}
 jobsubArgs=$(getBasicJobsubArgs $hostOutDir)
 
 #Add generator-specific lines to wrapper

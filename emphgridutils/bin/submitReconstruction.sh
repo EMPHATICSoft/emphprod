@@ -1,6 +1,8 @@
 #!/bin/bash
 #submitReconstruction.sh: Submit an ART job that takes no input to the grid
 
+set -euo pipefail
+
 #Help text
 if [[ $1 == "-h" || $1 == "--help" ]]; then
   echo "Usage: submitReconstruction.sh template.fcl outputDir input.root [moreInput.root...]"
@@ -11,6 +13,11 @@ fi
 #Get arguments from the command line
 configFile=$1
 fileList="fileList.txt"
+
+if [[ ! -f ${configFile} ]]; then
+  echo "Config file not found: ${configFile}" >&2
+  exit 2
+fi
 
 #Make list of .root files to process on the grid, one per job
 #while read fileName
@@ -24,7 +31,7 @@ fileList="fileList.txt"
 
 if [[ $# -gt 3 ]]
 then
-  rm $fileList
+  rm -f $fileList
   for fileName in ${@:3}
   do
     echo $fileName >> $fileList
@@ -54,6 +61,7 @@ checkOutputDir $hostOutDir
 makeOutputDirectory $hostOutDir
 makeTarball $codeDir $hostOutDir
 makeWrapperBoilerplate $codeDir > ${gridScriptName} #Overwrite grid script if it already exists from a previous job submission
+chmod +x ${gridScriptName}
 jobsubArgs=$(getBasicJobsubArgs $hostOutDir)
 
 #Add reconstruction-specific lines to wrapper
