@@ -41,6 +41,10 @@ BUILD_DIR_ENV = "EMPH_BUILD_DIR"
 STAGING_ROOT = "staging_dir"
 
 
+class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
+    """Show defaults while preserving manual line breaks in help text."""
+
+
 def print_env(args: argparse.Namespace) -> None:
     """Print a focused environment summary useful for submission debugging."""
     keys = [
@@ -288,9 +292,9 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "Directory transferred with --tar_file_name tardir://... as the source payload. "
-            f"If omitted, read from ${CODE_DIR_ENV}. This directory must contain "
-            "setup/setup_emphatic.sh (or emphaticsoft/setup/setup_emphatic.sh)."
+            "Source payload directory transferred with tardir://. "
+            f"If omitted, read from ${CODE_DIR_ENV}. Must contain "
+            "setup/setup_emphatic.sh or emphaticsoft/setup/setup_emphatic.sh."
         ),
     )
     environment_args.add_argument(
@@ -299,7 +303,7 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "Build directory transferred separately with --tar_file_name tardir://... . "
+            "Build directory transferred separately with tardir://. "
             f"If omitted, read from ${BUILD_DIR_ENV}."
         ),
     )
@@ -328,38 +332,86 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         "--smoke-test",
         dest="smoke_test",
         action="store_true",
-        help="Submit one real test job and set ART to run only 3 events",
+        help="Submit one real test job and force ART to run only 3 events",
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build top-level CLI parser and subcommands."""
-    parser = argparse.ArgumentParser(description="EMPHATIC grid submission utility")
+    parser = argparse.ArgumentParser(
+        description="EMPHATIC grid submission utility",
+        formatter_class=HelpFormatter,
+        epilog=(
+            "Environment defaults:\n"
+            f"  --code-dir falls back to ${CODE_DIR_ENV}\n"
+            f"  --build-dir falls back to ${BUILD_DIR_ENV}\n\n"
+            "Run '<subcommand> --help' for mode-specific options."
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    gen = subparsers.add_parser("gen", help="Submit generation jobs")
+    gen = subparsers.add_parser(
+        "gen",
+        help="Submit generation jobs",
+        description="Submit generator jobs that build per-process FHiCL and run art without an input ROOT list.",
+        formatter_class=HelpFormatter,
+    )
     add_common_groups(gen)
     gen_required = gen.add_argument_group("Required arguments")
-    gen_required.add_argument("template", type=Path)
-    gen_required.add_argument("generator", type=Path)
-    gen_required.add_argument("njobs", type=int)
+    gen_required.add_argument(
+        "template",
+        type=Path,
+        help="Template FHiCL file passed to the generator helper",
+    )
+    gen_required.add_argument(
+        "generator",
+        type=Path,
+        help="Executable helper that writes a process-specific FHiCL to stdout",
+    )
+    gen_required.add_argument(
+        "njobs",
+        type=int,
+        help="Number of grid jobs to submit in parallel",
+    )
 
     gen_job = gen.add_argument_group("Job control options")
     gen_job.add_argument(
         "--output",
         type=Path,
         default=Path(f"/pnfs/emphatic/persistent/users/{os.environ.get('USER', 'unknown')}/testSimulation"),
+        help="Output directory for grid job products; must not already exist",
     )
-    gen_job.add_argument("--outfile", default="testSimulation.root")
-    gen_job.add_argument("--wrapper", default="basicSimulation.sh")
+    gen_job.add_argument(
+        "--outfile",
+        default="testSimulation.root",
+        help="ROOT filename written by art on the worker node",
+    )
+    gen_job.add_argument(
+        "--wrapper",
+        default="basicSimulation.sh",
+        help="Wrapper filename written into the local staging directory",
+    )
     gen.set_defaults(handler=submit_generator)
 
-    reco = subparsers.add_parser("reco", help="Submit reconstruction jobs")
+    reco = subparsers.add_parser(
+        "reco",
+        help="Submit reconstruction jobs",
+        description="Submit reconstruction jobs over explicit inputs or paths read from stdin.",
+        formatter_class=HelpFormatter,
+    )
     add_common_groups(reco)
     reco_required = reco.add_argument_group("Required arguments")
-    reco_required.add_argument("config", type=Path)
-    reco_required.add_argument("inputs", nargs="*", help="Input ROOT files")
+    reco_required.add_argument(
+        "config",
+        type=Path,
+        help="FHiCL configuration file passed to art",
+    )
+    reco_required.add_argument(
+        "inputs",
+        nargs="*",
+        help="Input ROOT files; omit these if using --stdin",
+    )
 
     reco_support = reco.add_argument_group("Support options")
     reco_support.add_argument(
@@ -373,10 +425,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path(f"/pnfs/emphatic/persistent/users/{os.environ.get('USER', 'unknown')}/testReconstruction"),
+        help="Output directory for grid job products; must not already exist",
     )
-    reco_job.add_argument("--outfile", default="testReconstruction.root")
-    reco_job.add_argument("--wrapper", default="basicReconstruction.sh")
-    reco_job.add_argument("--input-list", default="fileList.txt", help="Name of generated input list file sent with the job")
+    reco_job.add_argument(
+        "--outfile",
+        default="testReconstruction.root",
+        help="ROOT filename written by art on the worker node",
+    )
+    reco_job.add_argument(
+        "--wrapper",
+        default="basicReconstruction.sh",
+        help="Wrapper filename written into the local staging directory",
+    )
+    reco_job.add_argument(
+        "--input-list",
+        default="fileList.txt",
+        help="Input-list filename written into the local staging directory",
+    )
     reco.set_defaults(handler=submit_reconstruction)
 
     return parser
