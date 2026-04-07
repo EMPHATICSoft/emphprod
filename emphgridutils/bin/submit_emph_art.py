@@ -371,6 +371,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen_required.add_argument(
         "template",
         type=Path,
+        nargs="?",
+        default=Path(__file__).parent / "g4gen_template.fcl",
         help="Template FHiCL file passed to the generator helper",
     )
     gen_required.add_argument(
