@@ -40,6 +40,8 @@ from submit_emph_art_core import (
 CODE_DIR_ENV = "EMPH_CODE_DIR"
 BUILD_DIR_ENV = "EMPH_BUILD_DIR"
 STAGING_ROOT = "staging_dir"
+SCRATCH_USERS_ROOT = "/pnfs/emphatic/scratch/users"
+PERSISTENT_USERS_ROOT = "/pnfs/emphatic/persistent/users"
 
 
 class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawTextHelpFormatter):
@@ -222,7 +224,7 @@ def submit_generator(args: argparse.Namespace) -> None:
 
     host_out_dir = args.output.resolve()
     info(f"Preparing generator submission to {host_out_dir}")
-    ensure_output_dir(host_out_dir, dry_run=args.dry_run)
+    ensure_output_dir(host_out_dir, dry_run=args.dry_run, allow_existing=not args.smoke_test)
 
     staging_dir = create_local_staging_dir("gen")
     payload_tarball = resolve_payload_tarball(args, staging_dir)
@@ -263,7 +265,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
 
     host_out_dir = args.output.resolve()
     info(f"Preparing reconstruction submission to {host_out_dir}")
-    ensure_output_dir(host_out_dir, dry_run=args.dry_run)
+    ensure_output_dir(host_out_dir, dry_run=args.dry_run, allow_existing=not args.smoke_test)
 
     staging_dir = create_local_staging_dir("reco")
     payload_tarball = resolve_payload_tarball(args, staging_dir)
@@ -432,8 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
     gen_job.add_argument(
         "--output",
         type=Path,
-        default=Path(f"/pnfs/emphatic/persistent/users/{os.environ.get('USER', 'unknown')}/testSimulation"),
-        help="Output directory for grid job products; must not already exist",
+        default=None,
+        help=(
+            "Output directory for grid products. Required for non-smoke submissions. "
+            "If omitted with --smoke-test, defaults to /pnfs/emphatic/scratch/users/$USER/testSimulation"
+        ),
     )
     gen_job.add_argument(
         "--outfile",
@@ -477,8 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
     reco_job.add_argument(
         "--output",
         type=Path,
-        default=Path(f"/pnfs/emphatic/persistent/users/{os.environ.get('USER', 'unknown')}/testReconstruction"),
-        help="Output directory for grid job products; must not already exist",
+        default=None,
+        help=(
+            "Output directory for grid products. Required for non-smoke submissions. "
+            "If omitted with --smoke-test, defaults to /pnfs/emphatic/scratch/users/$USER/testReconstruction"
+        ),
     )
     reco_job.add_argument(
         "--outfile",
@@ -506,6 +514,29 @@ def main() -> int:
     args = parser.parse_args()
     if args.test and args.smoke_test:
         parser.error("Use only one of --test or --smoke-test")
+
+    if args.output is None:
+        if args.smoke_test:
+            user = os.environ.get("USER", "unknown")
+            smoke_defaults = {
+                "gen": Path(f"{SCRATCH_USERS_ROOT}/{user}/testSimulation"),
+                "reco": Path(f"{SCRATCH_USERS_ROOT}/{user}/testReconstruction"),
+            }
+            args.output = smoke_defaults[args.mode]
+            info(f"Using smoke-test output directory: {args.output}")
+        else:
+            parser.error(
+                "--output is required for non-smoke submissions. "
+                "Use /pnfs/emphatic/scratch/users/<user>/... (preferred, short-lived) "
+                "or /pnfs/emphatic/persistent/users/<user>/... (long-lived)."
+            )
+
+    output_str = str(args.output)
+    if output_str.startswith(f"{PERSISTENT_USERS_ROOT}/"):
+        warn(
+            "Writing to persistent storage. Scratch is preferred for active production work; "
+            "copy only datasets you want to keep into persistent."
+        )
 
     if args.payload_tarball is None:
         if args.code_dir is None:
