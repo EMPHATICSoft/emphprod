@@ -96,8 +96,15 @@ def basic_jobsub_args(
     host_out_dir: Path,
     payload_tarball: Path,
     test_events: int | None = None,
+    site: str = "onsite",
 ) -> list[str]:
-    """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes."""
+    """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes.
+
+    ``site`` controls where jobs are routed:
+    - ``"onsite"``  -- ``--onsite``  (Fermilab only; default)
+    - ``"offsite"`` -- ``--offsite`` (remote sites only)
+    - ``"any"``     -- no site flag  (scheduler decides)
+    """
     args = [
         "-G",
         "emphatic",
@@ -110,6 +117,11 @@ def basic_jobsub_args(
         f"dropbox://{payload_tarball}",
         "--use-cvmfs-dropbox",
     ]
+    if site == "onsite":
+        args.append("--onsite")
+    elif site == "offsite":
+        args.append("--offsite")
+    # site == "any": no flag — scheduler decides
     if test_events is not None:
         args.extend(["-e", f"EMPH_TEST_EVENTS={test_events}"])
     return args
