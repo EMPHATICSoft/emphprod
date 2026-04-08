@@ -186,7 +186,7 @@ def build_generator_jobsub_command(
         f"dropbox://{args.generator.resolve()}",
         "-f",
         f"dropbox://{args.template.resolve()}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
         f"file://{wrapper_path}",
     ]
 
@@ -210,7 +210,7 @@ def build_reconstruction_jobsub_command(
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
         f"file://{wrapper_path}",
     ]
 
@@ -335,6 +335,21 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
         ),
     )
     environment_args.add_argument("--user", default=os.environ.get("USER"))
+
+    site_args = parser.add_argument_group(
+        "Site selection", "Control where jobs run in the grid."
+    )
+    site_args.add_argument(
+        "--site",
+        choices=["onsite", "offsite", "any"],
+        default="onsite",
+        help=(
+            "Where to route jobs: "
+            "'onsite' (Fermilab only, default), "
+            "'offsite' (remote sites only), "
+            "'any' (scheduler decides)"
+        ),
+    )
 
     debugging_args = parser.add_argument_group(
         "Debugging options", "Print extra diagnostics and avoid submission when requested."
