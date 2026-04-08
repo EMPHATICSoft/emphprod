@@ -230,11 +230,9 @@ def submit_generator(args: argparse.Namespace) -> None:
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: render fcl then run art.
     body = [
-        "ART_EVENT_ARGS=()",
-        "if [[ -n ${EMPH_TEST_EVENTS:-} ]]; then ART_EVENT_ARGS=(-n \"${EMPH_TEST_EVENTS}\"); fi",
         f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} ${{CONDOR_DIR_INPUT}}/{args.template.name} > config_${{PROCESS}}.fcl || exit 2",
         "echo \"***** finished generating template config file *****\"",
-        f"art ${{ART_EVENT_ARGS[@]}} -c config_${{PROCESS}}.fcl -o {args.outfile} || exit 3",
+        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c config_${{PROCESS}}.fcl -o {args.outfile}; else art -c config_${{PROCESS}}.fcl -o {args.outfile}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
@@ -275,11 +273,9 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     prologue = render_worker_setup(WrapperContext())
     # Worker-node actions after setup: pick job-specific input then run art.
     body = [
-        "ART_EVENT_ARGS=()",
-        "if [[ -n ${EMPH_TEST_EVENTS:-} ]]; then ART_EVENT_ARGS=(-n \"${EMPH_TEST_EVENTS}\"); fi",
         f"INPUT_FILE=$(head -n $((PROCESS+1)) ${{CONDOR_DIR_INPUT}}/{file_list.name} | tail -n -1) || exit 2",
         "echo \"***** finished finding input file *****\"",
-        f"art ${{ART_EVENT_ARGS[@]}} -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}} || exit 3",
+        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; else art -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
