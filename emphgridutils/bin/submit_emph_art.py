@@ -409,21 +409,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gen_required = gen.add_argument_group("Required arguments")
     gen_required.add_argument(
-        "template",
-        type=Path,
-        nargs="?",
-        default=Path(__file__).parent / "g4gen_template.fcl",
-        help="Template FHiCL file passed to the generator helper",
-    )
-    gen_required.add_argument(
         "generator",
         type=Path,
         help="Executable helper that writes a process-specific FHiCL to stdout",
     )
     gen_required.add_argument(
-        "njobs",
+        "--njobs",
         type=int,
+        required=True,
         help="Number of grid jobs to submit in parallel",
+    )
+    gen_required.add_argument(
+        "--template",
+        type=Path,
+        default=Path(__file__).parent / "g4gen_template.fcl",
+        help="Template FHiCL file passed to the generator helper",
     )
 
     gen_job = gen.add_argument_group("Job control options")
