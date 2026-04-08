@@ -41,22 +41,33 @@ class WrapperContext:
     output_tag: str = OUT_DIR_TAG
 
 
-def ensure_output_dir(host_out_dir: Path, dry_run: bool = False) -> None:
+def ensure_output_dir(
+    host_out_dir: Path,
+    dry_run: bool = False,
+    allow_existing: bool = False,
+) -> None:
     """Validate and create output directory used by dropbox/job output.
 
-    The output path is required to live under the experiment persistent pnfs area.
+    The output path must live under one of the experiment user areas:
+    - /pnfs/emphatic/scratch/users/
+    - /pnfs/emphatic/persistent/users/
     """
     host_out_dir_str = str(host_out_dir)
-    if "/pnfs/emphatic/persistent" not in host_out_dir_str:
+    allowed_prefixes = (
+        "/pnfs/emphatic/scratch/users/",
+        "/pnfs/emphatic/persistent/users/",
+    )
+    if not host_out_dir_str.startswith(allowed_prefixes):
         raise SubmissionError(
-            "Output directory must be on /pnfs/emphatic/persistent, "
+            "Output directory must be under /pnfs/emphatic/scratch/users/ "
+            "or /pnfs/emphatic/persistent/users/, "
             f"but got: {host_out_dir_str}"
         )
-    if host_out_dir.exists():
+    if host_out_dir.exists() and not allow_existing:
         raise SubmissionError(
             f"{host_out_dir_str} already exists. Delete it before submitting."
         )
-    if not dry_run:
+    if not dry_run and not host_out_dir.exists():
         host_out_dir.mkdir(parents=True)
 
 
