@@ -154,6 +154,10 @@ def validate_generator_inputs(args: argparse.Namespace) -> None:
         raise SubmissionError(f"run number must be >= 1, got {args.run_number}")
     if args.first_subrun < 1:
         raise SubmissionError(f"first subrun must be >= 1, got {args.first_subrun}")
+    if args.subruns_per_run is not None and args.subruns_per_run < 1:
+        raise SubmissionError(
+            f"subruns per run must be >= 1, got {args.subruns_per_run}"
+        )
     if args.nEvts < 1:
         raise SubmissionError(f"nEvts must be >= 1, got {args.nEvts}")
 
@@ -237,11 +241,10 @@ def submit_generator(args: argparse.Namespace) -> None:
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
     run_expr = str(args.run_number)
-    subrun_expr = str(args.first_subrun)
-    if args.iterate_id == "run":
-        run_expr = f"$((PROCESS + {args.run_number}))"
-    else:
-        subrun_expr = f"$((PROCESS + {args.first_subrun}))"
+    subrun_expr = f"$((PROCESS + {args.first_subrun}))"
+    if args.subruns_per_run is not None:
+        run_expr = f"$(({args.run_number} + PROCESS / {args.subruns_per_run}))"
+        subrun_expr = f"$(({args.first_subrun} + PROCESS % {args.subruns_per_run}))"
     # Worker-node actions after setup: render fcl then run art.
     body = [
         (
@@ -477,13 +480,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Starting subrun number for generated jobs",
     )
     gen_job.add_argument(
-        "--iterate-id",
-        choices=["subrun", "run"],
-        default="subrun",
+        "--subruns-per-run",
+        type=int,
+        default=None,
         help=(
-            "Which identifier to increment with PROCESS. "
-            "'subrun' keeps the run fixed and increments subrun (default); "
-            "'run' restores the previous behavior of incrementing the run while keeping subrun fixed."
+            "When set, iterate both run and subrun: subrun increments within a run, "
+            "and run increments after this many subruns. "
+            "When omitted, the run stays fixed and subrun increments with PROCESS."
         ),
     )
     gen_job.add_argument(
