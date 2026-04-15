@@ -150,6 +150,16 @@ def validate_generator_inputs(args: argparse.Namespace) -> None:
         raise SubmissionError(f"Generator script not found: {args.generator}")
     if args.njobs < 1:
         raise SubmissionError(f"njobs must be >= 1, got {args.njobs}")
+    if args.run_number < 1:
+        raise SubmissionError(f"run number must be >= 1, got {args.run_number}")
+    if args.first_subrun < 1:
+        raise SubmissionError(f"first subrun must be >= 1, got {args.first_subrun}")
+    if args.subruns_per_run is not None and args.subruns_per_run < 1:
+        raise SubmissionError(
+            f"subruns per run must be >= 1, got {args.subruns_per_run}"
+        )
+    if args.nEvts < 1:
+        raise SubmissionError(f"nEvts must be >= 1, got {args.nEvts}")
 
 
 def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[str]) -> None:
@@ -230,9 +240,20 @@ def submit_generator(args: argparse.Namespace) -> None:
     payload_tarball = resolve_payload_tarball(args, staging_dir)
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
+    run_expr = str(args.run_number)
+    subrun_expr = f"$((PROCESS + {args.first_subrun}))"
+    if args.subruns_per_run is not None:
+        run_expr = f"$(({args.run_number} + PROCESS / {args.subruns_per_run}))"
+        subrun_expr = f"$(({args.first_subrun} + PROCESS % {args.subruns_per_run}))"
     # Worker-node actions after setup: render fcl then run art.
     body = [
-        f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} ${{CONDOR_DIR_INPUT}}/{args.template.name} > config_${{PROCESS}}.fcl || exit 2",
+        (
+            f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} "
+            f"${{CONDOR_DIR_INPUT}}/{args.template.name} "
+            f"\"{run_expr}\" "
+            f"\"{subrun_expr}\" "
+            f"\"{args.nEvts}\" > config_${{PROCESS}}.fcl || exit 2"
+        ),
         "echo \"***** finished generating template config file *****\"",
         f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c config_${{PROCESS}}.fcl -o {args.outfile}; else art -c config_${{PROCESS}}.fcl -o {args.outfile}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
@@ -445,6 +466,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--wrapper",
         default="basicSimulation.sh",
         help="Wrapper filename written into the local staging directory",
+    )
+    gen_job.add_argument(
+        "--run-number",
+        type=int,
+        default=2408,
+        help="Base run number for generated jobs",
+    )
+    gen_job.add_argument(
+        "--first-subrun",
+        type=int,
+        default=1,
+        help="Starting subrun number for generated jobs",
+    )
+    gen_job.add_argument(
+        "--subruns-per-run",
+        type=int,
+        default=None,
+        help=(
+            "When set, iterate both run and subrun: subrun increments within a run, "
+            "and run increments after this many subruns. "
+            "When omitted, the run stays fixed and subrun increments with PROCESS."
+        ),
+    )
+    gen_job.add_argument(
+        "--nEvts",
+        type=int,
+        default=10,
+        help="Number of events written into source.maxEvents in the generated FHiCL",
     )
     gen.set_defaults(handler=submit_generator)
 
