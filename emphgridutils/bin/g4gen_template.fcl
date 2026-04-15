@@ -25,7 +25,7 @@ source:
   module_type: EmptyEvent
   maxEvents: 10
   firstRun:  @@RUN@@
-  firstSubRun: 1
+  firstSubRun: @@SUBRUN@@
 
 }
 

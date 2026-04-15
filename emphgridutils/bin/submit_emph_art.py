@@ -150,6 +150,10 @@ def validate_generator_inputs(args: argparse.Namespace) -> None:
         raise SubmissionError(f"Generator script not found: {args.generator}")
     if args.njobs < 1:
         raise SubmissionError(f"njobs must be >= 1, got {args.njobs}")
+    if args.run_number < 1:
+        raise SubmissionError(f"run number must be >= 1, got {args.run_number}")
+    if args.first_subrun < 1:
+        raise SubmissionError(f"first subrun must be >= 1, got {args.first_subrun}")
 
 
 def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[str]) -> None:
@@ -230,9 +234,20 @@ def submit_generator(args: argparse.Namespace) -> None:
     payload_tarball = resolve_payload_tarball(args, staging_dir)
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
+    run_expr = str(args.run_number)
+    subrun_expr = str(args.first_subrun)
+    if args.iterate_id == "run":
+        run_expr = f"$((PROCESS + {args.run_number}))"
+    else:
+        subrun_expr = f"$((PROCESS + {args.first_subrun}))"
     # Worker-node actions after setup: render fcl then run art.
     body = [
-        f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} ${{CONDOR_DIR_INPUT}}/{args.template.name} > config_${{PROCESS}}.fcl || exit 2",
+        (
+            f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} "
+            f"${{CONDOR_DIR_INPUT}}/{args.template.name} "
+            f"\"{run_expr}\" "
+            f"\"{subrun_expr}\" > config_${{PROCESS}}.fcl || exit 2"
+        ),
         "echo \"***** finished generating template config file *****\"",
         f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c config_${{PROCESS}}.fcl -o {args.outfile}; else art -c config_${{PROCESS}}.fcl -o {args.outfile}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
@@ -445,6 +460,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--wrapper",
         default="basicSimulation.sh",
         help="Wrapper filename written into the local staging directory",
+    )
+    gen_job.add_argument(
+        "--run-number",
+        type=int,
+        default=2408,
+        help="Base run number for generated jobs",
+    )
+    gen_job.add_argument(
+        "--first-subrun",
+        type=int,
+        default=1,
+        help="Starting subrun number for generated jobs",
+    )
+    gen_job.add_argument(
+        "--iterate-id",
+        choices=["subrun", "run"],
+        default="subrun",
+        help=(
+            "Which identifier to increment with PROCESS. "
+            "'subrun' keeps the run fixed and increments subrun (default); "
+            "'run' restores the previous behavior of incrementing the run while keeping subrun fixed."
+        ),
     )
     gen.set_defaults(handler=submit_generator)
 

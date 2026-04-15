@@ -6,9 +6,9 @@ set -euo pipefail
 if [[ ${1:-} == "-h" || ${1:-} == "--help" || $# < 3 ]]; then
   echo "DEPRECATED: Use emphgridutils/bin/submit_emph_art.py gen ..."
   echo "Usage: submitGenerator.sh template.fcl generator.sh nJobs [output directory]"
-  echo "- generator.sh takes template.fcl as an input, updates things like"
-  echo "run number and random seed based on the grid environment, and"
-  echo "prints the result to stdout."
+  echo "- generator.sh takes template.fcl as input and prints the job-specific"
+  echo "configuration to stdout. submit_emph_art.py now controls run/subrun"
+  echo "assignment at the CLI."
   echo "- nJobs is an integer number of jobs to run in parallel."
   echo "- This wrapper forwards to submit_emph_art.py generator."
   exit 1
@@ -33,7 +33,7 @@ generatorScript=$2
 nJobs=$3
 
 if [[ $# -ge 4 ]]; then
-  exec "${python_cli}" gen "${templateConfig}" "${generatorScript}" "${nJobs}" --output "$4"
+  exec "${python_cli}" gen "${generatorScript}" --njobs "${nJobs}" --template "${templateConfig}" --output "$4"
 fi
 
-exec "${python_cli}" gen "${templateConfig}" "${generatorScript}" "${nJobs}"
+exec "${python_cli}" gen "${generatorScript}" --njobs "${nJobs}" --template "${templateConfig}"
