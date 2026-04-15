@@ -154,6 +154,8 @@ def validate_generator_inputs(args: argparse.Namespace) -> None:
         raise SubmissionError(f"run number must be >= 1, got {args.run_number}")
     if args.first_subrun < 1:
         raise SubmissionError(f"first subrun must be >= 1, got {args.first_subrun}")
+    if args.nEvts < 1:
+        raise SubmissionError(f"nEvts must be >= 1, got {args.nEvts}")
 
 
 def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[str]) -> None:
@@ -246,7 +248,8 @@ def submit_generator(args: argparse.Namespace) -> None:
             f"bash ${{CONDOR_DIR_INPUT}}/{args.generator.name} "
             f"${{CONDOR_DIR_INPUT}}/{args.template.name} "
             f"\"{run_expr}\" "
-            f"\"{subrun_expr}\" > config_${{PROCESS}}.fcl || exit 2"
+            f"\"{subrun_expr}\" "
+            f"\"{args.nEvts}\" > config_${{PROCESS}}.fcl || exit 2"
         ),
         "echo \"***** finished generating template config file *****\"",
         f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c config_${{PROCESS}}.fcl -o {args.outfile}; else art -c config_${{PROCESS}}.fcl -o {args.outfile}; fi || exit 3",
@@ -482,6 +485,12 @@ def build_parser() -> argparse.ArgumentParser:
             "'subrun' keeps the run fixed and increments subrun (default); "
             "'run' restores the previous behavior of incrementing the run while keeping subrun fixed."
         ),
+    )
+    gen_job.add_argument(
+        "--nEvts",
+        type=int,
+        default=10,
+        help="Number of events written into source.maxEvents in the generated FHiCL",
     )
     gen.set_defaults(handler=submit_generator)
 

@@ -23,7 +23,7 @@ services:
 source:
 {
   module_type: EmptyEvent
-  maxEvents: 10
+  maxEvents: @@NEVTS@@
   firstRun:  @@RUN@@
   firstSubRun: @@SUBRUN@@
 
