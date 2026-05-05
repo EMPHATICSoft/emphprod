@@ -19,6 +19,7 @@ if [ ${#} = 2 ]; then
 		sed -e "s|fileNames: .*|fileNames: [\"${file}\"]|" "/exp/emph/app/users/${USER}/emphaticsoft/RawDataUnpacker/daq2rawdigit_job.fcl" > "${FCL}"
 		nice -n 20 art -c "${FCL}" -o "${OUTPUT_DIR}/emphdata_${TAG}_r${RUN}_s${SUBRUN}.artdaq.root" | tee --append "${LOG}"
 	done
+	mv "daq2root_${RUN}_${SUBRUN}.root" "${OUTPUT_DIR}/"
 	mv "${LOG}" "${OUTPUT_DIR}/${TAG}_r${RUN}_s${SUBRUN}.${LOG}"
 elif [ ${#} = 1 ]; then
 	RUN=${1}
@@ -30,6 +31,7 @@ elif [ ${#} = 1 ]; then
 		LOG=$(mktemp "XXXX.log")
 		sed -e "s|fileNames: .*|fileNames: [\"${file}\"]|" "/exp/emph/app/users/${USER}/emphaticsoft/RawDataUnpacker/daq2rawdigit_job.fcl" > "${FCL}"
 		nice -n 20 art -c "${FCL}" -o "${OUTPUT_DIR}/emphdata_${TAG}_r${RUN}_s${SUBRUN}.artdaq.root" | tee --append ${LOG}
+		mv "daq2root_${RUN}_${SUBRUN}.root" "${OUTPUT_DIR}/"
 		mv "${LOG}" "${OUTPUT_DIR}/${TAG}_r${RUN}_s${SUBRUN}.${LOG}"
 	done
 else
