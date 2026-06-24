@@ -8,9 +8,11 @@ template=$1
 run_number=${2:-$((PROCESS + FIRST_RUN))}
 subrun_number=${3:-$FIRST_SUBRUN}
 nevts=${4:-10}
+particle=${5:proton}
 SEED=$((PROCESS + timestamp))
 
 sed "s/@@RUN@@/$run_number/g" < "$template" > withRun.fcl
 sed "s/@@SUBRUN@@/$subrun_number/g" < withRun.fcl > withRunSubrun.fcl
 sed "s/@@NEVTS@@/$nevts/g" < withRunSubrun.fcl > withRunSubrunNevts.fcl
-sed "s/@@SEED@@/$SEED/g" < withRunSubrunNevts.fcl
+sed "s/@@PARTICLE@@/$particle/g" < withRunSubrunNevts.fcl > withRunSubrunNevtsP.fcl
+sed "s/@@SEED@@/$SEED/g" < withRunSubrunNevtsP.fcl

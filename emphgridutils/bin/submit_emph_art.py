@@ -198,7 +198,7 @@ def build_generator_jobsub_command(
         f"dropbox://{args.generator.resolve()}",
         "-f",
         f"dropbox://{args.template.resolve()}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, memory=args.memory, disk=args.disk,site=args.site),
         f"file://{wrapper_path}",
     ]
 
@@ -222,7 +222,7 @@ def build_reconstruction_jobsub_command(
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events,  memory=args.memory, disk=args.disk,site=args.site),
         f"file://{wrapper_path}",
     ]
 
@@ -252,7 +252,8 @@ def submit_generator(args: argparse.Namespace) -> None:
             f"${{CONDOR_DIR_INPUT}}/{args.template.name} "
             f"\"{run_expr}\" "
             f"\"{subrun_expr}\" "
-            f"\"{args.nEvts}\" > config_${{PROCESS}}.fcl || exit 2"
+            f"\"{args.nEvts}\" " 
+            f"\"{args.particle}\" > config_${{PROCESS}}.fcl || exit 2"
         ),
         "echo \"***** finished generating template config file *****\"",
         f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c config_${{PROCESS}}.fcl -o {args.outfile}; else art -c config_${{PROCESS}}.fcl -o {args.outfile}; fi || exit 3",
@@ -494,6 +495,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of events written into source.maxEvents in the generated FHiCL",
+    )
+    gen_job.add_argument(
+    "--memory",
+    type=str,
+    default="3GB",
+    help="Memory request to grid node worker",
+    )
+    gen_job.add_argument(
+    "--disk",
+    type=str,
+    default="3GB",
+    help="Disk request to grid node worker",
+    )
+    gen_job.add_argument(
+    "--particle",
+    type=str,
+    default="proton",
+    help="Particle specie to set particle gun in G4",
     )
     gen.set_defaults(handler=submit_generator)
 
