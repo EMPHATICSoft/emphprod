@@ -135,6 +135,8 @@ log "Changed to build directory: ${build_dir}"
 # on the read-only CVMFS mount that holds the payload.
 safe_source "${source_dir}/setup/setup_for_grid.sh" "setup_for_grid.sh"
 
+export FW_SEARCH_PATH="${source_dir}/ConstBase/Geometry${FW_SEARCH_PATH:+:${FW_SEARCH_PATH}}"
+
 # setup_emphaticsoft is pre-generated at build time; it uses the setenv shim
 # installed by setup_for_grid.sh so it works in bash without tcsh.
 if [[ -f setup_emphaticsoft ]]; then

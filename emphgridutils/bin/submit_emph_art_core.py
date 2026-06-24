@@ -108,6 +108,8 @@ def basic_jobsub_args(
     payload_tarball: Path,
     test_events: int | None = None,
     site: str = "onsite",
+    memory: str = "3GB",
+    disk: str = "3GB"
 ) -> list[str]:
     """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes.
 
@@ -127,6 +129,8 @@ def basic_jobsub_args(
         "--tar_file_name",
         f"dropbox://{payload_tarball}",
         "--use-cvmfs-dropbox",
+        f"--memory={memory}",
+        f"--disk={disk}"
     ]
     if site == "onsite":
         args.append("--onsite")
