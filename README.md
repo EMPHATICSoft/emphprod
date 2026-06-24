@@ -90,7 +90,7 @@ if it's a parameter needed on the fcl:
   
 2. Add it to emphgridutils/bin/generateMCJob.sh
 ```
-particle=${5:"proton"}
+particle=${5:proton}
 .
 .
 .
