@@ -36,6 +36,69 @@ git push --set-upstream origin feature/${USER}_branch_description
 
 Then, enter the GitHub interface and follow the "Submit a pull request" documentation above.  Please enter meaningful descriptions of your changes so that it's easier to understand them :)
 
+#### Add params to submit 
+
+For future refence on how to add new params (such as memory, disk, particle type, etc) for the submission (example using gen, reco is the same): 
+```
+emphprod/emphgridutils/bin/submit_emph_art.py gen \
+  emphprod/emphgridutils/bin/generateMCJob.sh \
+  --njobs 100 \
+  --run-number 2408 \
+  --first-subrun 1 \
+  --nEvts 1000 \
+  --memory 4GB \
+  --disk 3GB \
+```
+The new parameters need to be added to emphgridutils/bin/submit_emph_art.py as
+```
+gen_job.add_argument(
+    "--memory",
+    type=str,
+    default="3GB",
+    help="Memory request to grid node worker",
+    )
+```
+if it's a core params (something the grid node needs to know about) change also build_generator_jobsub_command in submit_emph_art_core.py
+```
+def basic_jobsub_args(
+    host_out_dir: Path,
+    payload_tarball: Path,
+    test_events: int | None = None,
+    site: str = "onsite",
+    memory: str = "3GB",
+    disk: str = "3GB"
+
+ args = [
+        "-G",
+        "emphatic",
+        "-d",
+        OUT_DIR_TAG,
+        str(host_out_dir),
+        "-l",
+        "+SingularityImage=\"/cvmfs/singularity.opensciencegrid.org/fermilab/fnal-wn-sl7:latest\"",
+        "--tar_file_name",
+        f"dropbox://{payload_tarball}",
+        "--use-cvmfs-dropbox",
+        f"--memory={memory}",
+        f"--disk={disk}"
+    ]
+```
+
+if it's a parameter needed on the fcl:
+
+1. Change the parameter value to something like @@NAMEPARAM@@ in the template fcl
+  
+2. Add it to emphgridutils/bin/generateMCJob.sh
+```
+particle=${5:proton}
+.
+.
+.
+sed "s/@@PARTICLE@@/$particle/g" < withRunSubrunNevts.fcl > withRunSubrunNevtsP.fcl
+```
+This line will change all instances of @@PARTICLE@@ with the str/values carried by $particle
+
+
 # Copyright & Licensing
 Copyright © 2023 FERMI NATIONAL ACCELERATOR LABORATORY for the benefit
 of the EMPHATIC Collaboration.
