@@ -3,7 +3,11 @@
 
 This CLI has two modes:
 - ``gen``: submit generation jobs (no input ROOT file list).
-- ``reco``: submit reconstruction jobs (explicit input list or stdin).
+- ``reco``: submit reconstruction jobs over explicit inputs or stdin. Loose
+  ``.root`` inputs are partitioned into jobs of ``--files-per-job`` files each
+  (default 1 -> one file per job); any non-``.root`` argument is read as a list
+  file that becomes one job. ``--input-mode`` selects whether art reads each
+  job's files via ``-S <list>`` (source-list) or as positional file arguments.
 
 The high-level flow in both modes is:
 1. Validate arguments and required local tools.
@@ -162,12 +166,61 @@ def validate_generator_inputs(args: argparse.Namespace) -> None:
         raise SubmissionError(f"nEvts must be >= 1, got {args.nEvts}")
 
 
-def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[str]) -> None:
-    """Validate reconstruction-specific arguments after stdin/CLI merge."""
+def validate_reconstruction_inputs(args: argparse.Namespace, units: Sequence[Sequence[str]]) -> None:
+    """Validate reconstruction-specific arguments after grouping inputs into jobs."""
     if not args.config.exists():
         raise SubmissionError(f"Config file not found: {args.config}")
-    if not inputs:
-        raise SubmissionError("At least one input ROOT file is required for reconstruction")
+    if not units:
+        raise SubmissionError(
+            "At least one input ROOT file or input list is required for reconstruction"
+        )
+
+
+def _chunk(items: list[str], size: int) -> list[list[str]]:
+    """Split a flat list into consecutive groups of at most ``size`` items."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def build_reconstruction_units(args: argparse.Namespace) -> list[list[str]]:
+    """Group reconstruction inputs into one file list per grid job.
+
+    Each positional argument is classified by extension:
+    - ``*.root`` paths/URIs join a flat pool that is chunked into jobs of
+      ``--files-per-job`` files each (default 1 -> one file per job).
+    - any other argument is read as a text list file whose lines are ROOT file
+      paths; that list becomes exactly one job.
+
+    ``--stdin`` lines join the flat ``.root`` pool. All paths are converted from
+    local pnfs to xrootd so worker nodes can read them.
+    """
+    if args.files_per_job < 1:
+        raise SubmissionError(f"files-per-job must be >= 1, got {args.files_per_job}")
+
+    loose: list[str] = []
+    explicit_units: list[list[str]] = []
+    for raw in args.inputs:
+        token = raw.strip()
+        if not token:
+            continue
+        if token.endswith(".root"):
+            loose.append(convert_pnfs_to_xrootd(token))
+            continue
+        list_path = Path(token)
+        if not list_path.is_file():
+            raise SubmissionError(f"Input list file not found: {token}")
+        entries = [line.strip() for line in list_path.read_text().splitlines() if line.strip()]
+        if not entries:
+            raise SubmissionError(f"Input list file is empty: {token}")
+        explicit_units.append([convert_pnfs_to_xrootd(entry) for entry in entries])
+
+    if args.stdin:
+        loose.extend(
+            convert_pnfs_to_xrootd(line.strip())
+            for line in sys.stdin
+            if line.strip()
+        )
+
+    return _chunk(loose, args.files_per_job) + explicit_units
 
 
 def resolve_payload_tarball(args: argparse.Namespace, staging_dir: Path) -> Path:
@@ -208,10 +261,17 @@ def build_reconstruction_jobsub_command(
     host_out_dir: Path,
     wrapper_path: Path,
     file_list: Path,
+    group_list: Path,
     n_jobs: int,
     payload_tarball: Path,
 ) -> list[str]:
-    """Build the full ``jobsub_submit`` argv for reconstruction mode."""
+    """Build the full ``jobsub_submit`` argv for reconstruction mode.
+
+    One grid job runs per input group, so ``-N`` is the number of groups
+    (forced to 1 under ``--smoke-test``). The flat file list and the per-job
+    group-count manifest are both transferred so each worker can slice out its
+    own group by ``PROCESS``.
+    """
     effective_jobs = 1 if args.smoke_test else n_jobs
     test_events = 3 if args.smoke_test else None
     return [
@@ -222,6 +282,8 @@ def build_reconstruction_jobsub_command(
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
+        "-f",
+        f"dropbox://{group_list}",
         *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
         f"file://{wrapper_path}",
     ]
@@ -271,34 +333,50 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     """Run the reconstruction submission workflow."""
     validate_common_inputs(args)
 
-    # Combine explicit CLI inputs with optional stdin list.
-    input_values = list(args.inputs)
-    if args.stdin:
-        input_values.extend(
-            line.strip() for line in sys.stdin if line.strip()
-        )
-
-    # Convert local pnfs paths to xrootd so worker nodes can read them.
-    inputs = [convert_pnfs_to_xrootd(item) for item in input_values]
-    validate_reconstruction_inputs(args, inputs)
+    # Partition inputs into one file list per grid job.
+    units = build_reconstruction_units(args)
+    validate_reconstruction_inputs(args, units)
 
     host_out_dir = args.output.resolve()
-    info(f"Preparing reconstruction submission to {host_out_dir}")
+    info(f"Preparing reconstruction submission to {host_out_dir} ({len(units)} job(s))")
     ensure_output_dir(host_out_dir, dry_run=args.dry_run, allow_existing=not args.smoke_test)
 
     staging_dir = create_local_staging_dir("reco")
     payload_tarball = resolve_payload_tarball(args, staging_dir)
+
+    # fileList.txt holds every input file across all jobs, in job order;
+    # fileGroups.txt holds the file count for each job so the worker can slice
+    # out its own group by PROCESS index.
+    all_files = [path for unit in units for path in unit]
+    counts = [len(unit) for unit in units]
     file_list = stage_local_file(staging_dir, args.input_list)
+    group_list = stage_local_file(staging_dir, "fileGroups.txt")
     if not args.dry_run:
-        file_list.write_text("\n".join(inputs) + "\n")
+        file_list.write_text("\n".join(all_files) + "\n")
+        group_list.write_text("\n".join(str(count) for count in counts) + "\n")
 
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
-    # Worker-node actions after setup: pick job-specific input then run art.
+    # Lists are delivered by dropbox to ${CONDOR_DIR_INPUT}; --input-mode picks
+    # how art consumes this job's slice.
+    file_ref = f"${{CONDOR_DIR_INPUT}}/{file_list.name}"
+    group_ref = f"${{CONDOR_DIR_INPUT}}/{group_list.name}"
+    job_list = "job_inputs.txt"
+    if args.input_mode == "source-list":
+        art_inputs = f"-S {job_list}"
+    else:  # positional — word-split this job's list into per-file args
+        art_inputs = f"$(cat {job_list})"
+    # Worker-node actions after setup: slice this job's file group (by PROCESS)
+    # out of the flat list, then run art over it.
     body = [
-        f"INPUT_FILE=$(head -n $((PROCESS+1)) ${{CONDOR_DIR_INPUT}}/{file_list.name} | tail -n -1) || exit 2",
-        "echo \"***** finished finding input file *****\"",
-        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; else art -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; fi || exit 3",
+        f"GROUP_COUNT=$(sed -n \"$((PROCESS+1))p\" {group_ref}) || exit 2",
+        f"GROUP_START=$(awk -v p=\"${{PROCESS}}\" 'NR<=p {{ start += $1 }} END {{ print start + 1 }}' {group_ref}) || exit 2",
+        "GROUP_END=$((GROUP_START + GROUP_COUNT - 1))",
+        f"sed -n \"${{GROUP_START}},${{GROUP_END}}p\" {file_ref} > {job_list} || exit 2",
+        "echo \"***** selected ${GROUP_COUNT} input file(s) for PROCESS ${PROCESS} *****\"",
+        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then "
+        f"art -n \"${{EMPH_TEST_EVENTS}}\" -c {args.config.name} -o {args.outfile} {art_inputs}; "
+        f"else art -c {args.config.name} -o {args.outfile} {art_inputs}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
@@ -309,7 +387,8 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
         host_out_dir,
         wrapper_path,
         file_list,
-        len(inputs),
+        group_list,
+        len(units),
         payload_tarball,
     )
     if args.print_jobsub:
@@ -501,7 +580,12 @@ def build_parser() -> argparse.ArgumentParser:
         "reco",
         parents=[common_parser],
         help="Submit reconstruction jobs",
-        description="Submit reconstruction jobs over explicit inputs or paths read from stdin.",
+        description=(
+            "Submit reconstruction jobs over explicit inputs or paths read from stdin.\n"
+            "Loose .root inputs are chunked into jobs of --files-per-job files; a\n"
+            "non-.root argument is read as a list file that becomes one job.\n"
+            "--input-mode selects how art receives each job's files."
+        ),
         formatter_class=HelpFormatter,
     )
     reco_required = reco.add_argument_group("Required arguments")
@@ -521,6 +605,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--stdin",
         action="store_true",
         help="Read input file paths from stdin (one per line)",
+    )
+    reco_support.add_argument(
+        "--input-mode",
+        dest="input_mode",
+        choices=["source-list", "positional"],
+        default="source-list",
+        help=(
+            "How art receives this job's files on the worker:\n"
+            "  source-list: art -S <job list> (robust; no arg-length limits)\n"
+            "  positional:  art -c fcl -o out f1 f2 ...  (art -c <fcl> <files>* form)"
+        ),
     )
 
     reco_job = reco.add_argument_group("Job control options")
@@ -547,6 +642,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-list",
         default="fileList.txt",
         help="Input-list filename written into the local staging directory",
+    )
+    reco_job.add_argument(
+        "--files-per-job",
+        dest="files_per_job",
+        type=int,
+        default=1,
+        help=(
+            "Number of loose .root inputs to group into each grid job "
+            "(default 1 = one file per job). Does not affect explicit list-file "
+            "arguments, which each become one job."
+        ),
     )
     reco.set_defaults(handler=submit_reconstruction)
 
