@@ -361,6 +361,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     # how art consumes this job's slice.
     file_ref = f"${{CONDOR_DIR_INPUT}}/{file_list.name}"
     group_ref = f"${{CONDOR_DIR_INPUT}}/{group_list.name}"
+    config_ref = f"${{CONDOR_DIR_INPUT}}/{args.config.name}"
     job_list = "job_inputs.txt"
     if args.input_mode == "source-list":
         art_inputs = f"-S {job_list}"
@@ -375,8 +376,8 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
         f"sed -n \"${{GROUP_START}},${{GROUP_END}}p\" {file_ref} > {job_list} || exit 2",
         "echo \"***** selected ${GROUP_COUNT} input file(s) for PROCESS ${PROCESS} *****\"",
         f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then "
-        f"art -n \"${{EMPH_TEST_EVENTS}}\" -c {args.config.name} -o {args.outfile} {art_inputs}; "
-        f"else art -c {args.config.name} -o {args.outfile} {art_inputs}; fi || exit 3",
+        f"art -n \"${{EMPH_TEST_EVENTS}}\" -c {config_ref} -o {args.outfile} {art_inputs}; "
+        f"else art -c {config_ref} -o {args.outfile} {art_inputs}; fi || exit 3",
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
