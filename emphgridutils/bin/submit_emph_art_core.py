@@ -108,6 +108,9 @@ def basic_jobsub_args(
     payload_tarball: Path,
     test_events: int | None = None,
     site: str = "onsite",
+    memory: str = "2GB",
+    disk: str = "10GB",
+    cpu: str = "1",
 ) -> list[str]:
     """Return standard EMPHATIC ``jobsub_submit`` arguments shared by all modes.
 
@@ -135,6 +138,14 @@ def basic_jobsub_args(
     # site == "any": no flag — scheduler decides
     if test_events is not None:
         args.extend(["-e", f"EMPH_TEST_EVENTS={test_events}"])
+
+    # This should probably get some error checking in the future.
+    if memory is not None:
+        args.append(f"--memory={memory}")
+    if disk is not None:
+        args.append(f"--disk={disk}")
+    if cpu is not None:
+        args.append(f"--cpu={cpu}")
     return args
 
 

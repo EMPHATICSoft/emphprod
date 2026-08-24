@@ -198,7 +198,7 @@ def build_generator_jobsub_command(
         f"dropbox://{args.generator.resolve()}",
         "-f",
         f"dropbox://{args.template.resolve()}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site, memory=args.memory, disk=args.disk, cpu=args.cpu),
         f"file://{wrapper_path}",
     ]
 
@@ -222,7 +222,7 @@ def build_reconstruction_jobsub_command(
         f"dropbox://{args.config.resolve()}",
         "-f",
         f"dropbox://{file_list}",
-        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site),
+        *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site, memory=args.memory, disk=args.disk, cpu=args.cpu),
         f"file://{wrapper_path}",
     ]
 
@@ -367,6 +367,31 @@ def add_common_groups(parser: argparse.ArgumentParser) -> None:
             "'onsite' (Fermilab only, default), "
             "'offsite' (remote sites only), "
             "'any' (scheduler decides)"
+        ),
+    )
+
+    resource_args = parser.add_argument_group(
+        "Resource allocation", "Controls requested resources per job."
+    )
+    resource_args.add_argument(
+        "--memory",
+        default="2GB",
+        help=(
+            "How much memory alotted per job."
+        ),
+    )
+    resource_args.add_argument(
+        "--disk",
+        default="10GB",
+        help=(
+            "How much disk alotted per job."
+        ),
+    )
+    resource_args.add_argument(
+        "--cpu",
+        default="1",
+        help=(
+            "How much CPU alotted per job."
         ),
     )
 
