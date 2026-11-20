@@ -168,6 +168,28 @@ def validate_reconstruction_inputs(args: argparse.Namespace, inputs: Sequence[st
         raise SubmissionError(f"Config file not found: {args.config}")
     if not inputs:
         raise SubmissionError("At least one input ROOT file is required for reconstruction")
+    names = [args.config.name, args.input_list]
+    for extra in args.extra_file:
+        if not extra.is_file():
+            raise SubmissionError(f"Extra file not found: {extra}")
+        if extra.name in names:
+            raise SubmissionError(f"Extra file name collides with another job input: {extra.name}")
+        names.append(extra.name)
+
+
+def stage_reconstruction_config(args: argparse.Namespace, staging_dir: Path) -> Path:
+    """Return the FHiCL file the job runs: the given config, or a staged copy with --fcl-override lines appended.
+
+    FHiCL takes the last assignment of a parameter, so appended lines override the config's own values.
+    """
+    if not args.fcl_override:
+        return args.config.resolve()
+    staged = stage_local_file(staging_dir, f"{args.config.stem}_override.fcl")
+    if not args.dry_run:
+        lines = [args.config.read_text().rstrip("\n"), "", "# --fcl-override (submit_emph_art.py)", *args.fcl_override, ""]
+        staged.write_text("\n".join(lines))
+    info(f"Staged {staged.name}: {args.config.name} + {len(args.fcl_override)} override line(s)")
+    return staged
 
 
 def resolve_payload_tarball(args: argparse.Namespace, staging_dir: Path) -> Path:
@@ -210,18 +232,21 @@ def build_reconstruction_jobsub_command(
     file_list: Path,
     n_jobs: int,
     payload_tarball: Path,
+    config_path: Path,
 ) -> list[str]:
     """Build the full ``jobsub_submit`` argv for reconstruction mode."""
     effective_jobs = 1 if args.smoke_test else n_jobs
     test_events = 3 if args.smoke_test else None
+    extra = [arg for f in args.extra_file for arg in ("-f", f"dropbox://{f.resolve()}")]
     return [
         "jobsub_submit",
         "-N",
         str(effective_jobs),
         "-f",
-        f"dropbox://{args.config.resolve()}",
+        f"dropbox://{config_path}",
         "-f",
         f"dropbox://{file_list}",
+        *extra,
         *basic_jobsub_args(host_out_dir, payload_tarball, test_events=test_events, site=args.site, memory=args.memory, disk=args.disk, cpu=args.cpu),
         f"file://{wrapper_path}",
     ]
@@ -292,13 +317,21 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
     if not args.dry_run:
         file_list.write_text("\n".join(inputs) + "\n")
 
+    config_path = stage_reconstruction_config(args, staging_dir)
+    # art looks a bare config name up on FHICL_FILE_PATH (the installed configs), not in the job inputs: run the staged
+    # copy by its path in the job's input directory
+    config_arg = f"${{CONDOR_DIR_INPUT}}/{config_path.name}" if args.fcl_override else config_path.name
+
     wrapper_path = stage_local_file(staging_dir, args.wrapper)
     prologue = render_worker_setup(WrapperContext())
-    # Worker-node actions after setup: pick job-specific input then run art.
+    # Worker-node actions after setup: pick job-specific input, copy --extra-file inputs into the job
+    # directory (art's working directory, so FHiCL can name them by relative path), then run art.
     body = [
         f"INPUT_FILE=$(head -n $((PROCESS+1)) ${{CONDOR_DIR_INPUT}}/{file_list.name} | tail -n -1) || exit 2",
         "echo \"***** finished finding input file *****\"",
-        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; else art -c {args.config.name} -o {args.outfile} ${{INPUT_FILE}}; fi || exit 3",
+        *[f"cp \"${{CONDOR_DIR_INPUT}}/{f.name}\" . || exit 2" for f in args.extra_file],
+        f"if [[ -n ${{EMPH_TEST_EVENTS:-}} ]]; then art -n \"${{EMPH_TEST_EVENTS}}\" -c {config_arg} -o {args.outfile} ${{INPUT_FILE}}; else art -c {config_arg} -o {args.outfile} ${{INPUT_FILE}}; fi || exit 3",
+        *([f"rm -f {' '.join(f.name for f in args.extra_file)}"] if args.extra_file else []),
         "echo \"***** finished ART job *****\"",
     ]
     write_wrapper_script(wrapper_path, prologue, body)
@@ -311,6 +344,7 @@ def submit_reconstruction(args: argparse.Namespace) -> None:
         file_list,
         len(inputs),
         payload_tarball,
+        config_path,
     )
     if args.print_jobsub:
         print(command_to_string(cmd))
@@ -572,6 +606,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-list",
         default="fileList.txt",
         help="Input-list filename written into the local staging directory",
+    )
+    reco_job.add_argument(
+        "--extra-file",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Ship this file with the jobs and copy it into the job directory before art runs, so the "
+            "FHiCL can refer to it by name (e.g. SSD alignment constants for "
+            "services.RunHistoryService.AlignFilename). Repeatable."
+        ),
+    )
+    reco_job.add_argument(
+        "--fcl-override",
+        action="append",
+        default=[],
+        metavar="LINE",
+        help=(
+            "FHiCL line appended to a staged copy of the config (later assignments win), e.g. "
+            "'services.RunHistoryService.AlignFilename: \"align.txt\"'. Repeatable."
+        ),
     )
     reco.set_defaults(handler=submit_reconstruction)
 
